@@ -57,6 +57,21 @@ SUFFIXES = {"windows": "-windows-x64-setup.exe", "macos": "-macos-arm64.dmg", "l
 # The installer's stand-in game folder: tiny MIX and CSF files that pass its
 # game-data check and hold both master archives the first launch looks for.
 TEST_GAME = ROOT / ".github/release/windows/test-game"
+# The release page, as .github/release/notes.sh writes it: the offer lists its
+# changes, more than its list shows at once.
+BODY = """### Changes since v0.0.1
+
+- This test release checks that VERA20K updates itself from the downloads site.
+- Its offer lists each change from the release page, below the question.
+- Long changes wrap onto further rows, indented under their first word.
+- **Emphasis** and [links](https://github.com/YuriPlanet/vera20k) lose their `Markdown`.
+- The list scrolls with its arrows, its thumb or the mouse wheel.
+- Update downloads the release with progress, installs it and restarts VERA20K.
+
+[All changes](https://github.com/YuriPlanet/vera20k)
+
+You need your own copy of Yuri's Revenge.
+"""
 
 
 def platform() -> str:
@@ -91,7 +106,8 @@ def publish(work: Path, key: Path, version: str, release: Path | None) -> Path:
                        "digest": "sha256:" + sha256(path), "state": "uploaded"})
     tag = f"v{version}"
     config = {"tag": tag, "commit": "a" * 40,
-              "release": {"id": 1, "tag_name": tag, "draft": False, "prerelease": False, "assets": assets}}
+              "release": {"id": 1, "tag_name": tag, "draft": False, "prerelease": False, "assets": assets,
+                          "body": BODY}}
     result = publisher.run(tag, config, key.read_text())
     if result.returncode:
         raise SystemExit(f"publish-r2.sh failed:\n{result.stdout}{result.stderr}")

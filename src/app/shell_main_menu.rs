@@ -1305,6 +1305,10 @@ Details: {details}"
         if state.frontend.shell_controller.top_id() != Some(dialog) {
             return;
         }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        if crate::app::updater::notes::pointer_button(state, true) {
+            return;
+        }
         state.frontend.shell_controller.on_pointer_down(x, y, &feed);
         // The message box (`0x005D3490`, proc `0x005D36A0`) subclasses its
         // owner-draw OK/Cancel to `0x00612B70`, which plays
@@ -1322,6 +1326,8 @@ Details: {details}"
         if state.frontend.shell_controller.top_id() != Some(dialog) {
             return;
         }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        crate::app::updater::notes::pointer_button(state, false);
         let activated = state.frontend.shell_controller.on_pointer_up(x, y, &feed);
         if let Some(result) =
             activated.and_then(crate::ui::shell::modal::ModalResult::from_message_box_control)
@@ -1366,7 +1372,7 @@ Details: {details}"
                 Self::advance_campaign_victory(state, *victory);
             }
             #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-            ShellMessageBoxPurpose::UpdateOffer => {
+            ShellMessageBoxPurpose::UpdateOffer(_) => {
                 Self::close_shell_message_box_from_controller(state);
                 crate::app::updater::answer_offer(state, result);
             }

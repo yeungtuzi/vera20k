@@ -20,6 +20,14 @@
       "size": 45
     }
   },
+  "notes": [
+    "This test release checks that VERA20K updates itself from the downloads site.",
+    "Its offer lists each change from the release page, below the question.",
+    "Long changes wrap onto further rows, indented under their first word.",
+    "Emphasis and links lose their Markdown.",
+    "The list scrolls with its arrows, its thumb or the mouse wheel.",
+    "Update downloads the release with progress, installs it and restarts VERA20K."
+  ],
   "tag": "v1.2.3",
   "version": "1.2.3"
 }

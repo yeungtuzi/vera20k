@@ -1943,6 +1943,7 @@ mod connection;
 pub(crate) use connection::{connection_shell_drawable, render_connection_shell};
 
 mod list;
+pub(crate) use list::paint_list;
 
 mod sound;
 pub(crate) use sound::render_sound_shell;

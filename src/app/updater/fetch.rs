@@ -206,6 +206,7 @@ mod tests {
             name: "vera20k-1.2.3-macos-arm64.dmg".into(),
             sha256: digest.finalize(),
             size: installer.len() as u64,
+            notes: Vec::new(),
         };
         let changed = b"installer bytez";
         let refused = save(&changed[..], &release, &folder, &Progress::default());

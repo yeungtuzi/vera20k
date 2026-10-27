@@ -4,14 +4,16 @@
 //! its release package checks `latest.json` on a worker thread. A newer
 //! release whose manifest verifies against the update key is offered once
 //! the main menu is idle, in the shell's own message boxes: Update, Skip This
-//! Version or Later. Update downloads it with progress in the box, checks its
-//! size and SHA-256, installs it and restarts into it. Nothing is asked
-//! during a match, and a check that fails, offline included, stays silent.
+//! Version or Later, beside what changed (`notes`). Update downloads it with
+//! progress in the box, checks its size and SHA-256, installs it and restarts
+//! into it. Nothing is asked during a match, and a check that fails, offline
+//! included, stays silent.
 //! Publication: `.github/release/downloads.md`.
 
 mod fetch;
 mod install;
 mod manifest;
+pub(crate) mod notes;
 
 use std::process::Command;
 use std::sync::Arc;
@@ -160,7 +162,7 @@ pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
         },
         phase => {
             state.frontend.updater.phase = phase;
-            None
+            notes::poll_scroll(state)
         }
     }
 }
@@ -220,13 +222,14 @@ pub(crate) fn open_offer(state: &mut AppState) {
         third: "Skip Version".to_owned(),
         cancel: "Later".to_owned(),
     };
+    let notes = notes::ReleaseNotes::new(&state.renderer.bit_font, &release.notes);
     crate::app::frontend::main_menu_shell_render::clear_ra2ts_movie_session(state);
     crate::app::frontend::shell_transition::invalidate_main_menu_dialog_instance(state);
     App::open_shell_message_box(
         state,
         ShellMessageBox {
             labels,
-            purpose: ShellMessageBoxPurpose::UpdateOffer,
+            purpose: ShellMessageBoxPurpose::UpdateOffer(notes),
         },
     );
 }

@@ -79,6 +79,26 @@ class ReleaseDownloadsTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(len(self.puts()), 6, "an identical retry must not overwrite any object")
 
+    def test_signed_manifest_lists_the_release_pages_changes(self):
+        # As .github/release/notes.sh writes it, saved from GitHub's editor.
+        body = ("### Changes since v0.2.1\n\n- Play online through Internet → Custom Match.\n"
+                "- **Faster** [LAN](https://example.com/lan) games with `-fast`.\n- [and 3 more](https://example.com)\n\n"
+                "[All changes](https://example.com/compare)\n\nYou need your own copy of Yuri's Revenge.\n\n"
+                "- **Windows:** run the `-setup.exe`.\n")
+        for text, notes in [(body.replace("\n", "\r\n"), ["Play online through Internet → Custom Match.",
+                                                          "Faster LAN games with -fast.", "and 3 more"]),
+                            ("Free software under the GNU GPL.\n\n- **Windows:** run it.", [])]:
+            with self.subTest(notes=notes):
+                self.config["release"]["body"] = text
+                shutil.rmtree(self.root / "objects")
+                (self.root / "objects").mkdir()
+                result = self.run_publisher()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = (self.root / "objects/releases/v0.2.2/manifest.json").read_bytes()
+                self.assertEqual(json.loads(manifest)["notes"], notes)
+                signature = (self.root / "objects/releases/v0.2.2/manifest.json.sig").read_text()
+                self.assertTrue(verify_signature(self.public_key, manifest, signature, self.root))
+
     def test_signing_key_must_match_the_trusted_public_key(self):
         old_pointer = self.prior_pointer()
         self.assertNotEqual(self.run_publisher(signing_key="").returncode, 0)

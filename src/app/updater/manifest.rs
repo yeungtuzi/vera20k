@@ -105,6 +105,8 @@ struct Manifest {
     version: String,
     tag: String,
     files: BTreeMap<String, ManifestFile>,
+    #[serde(default)]
+    notes: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +127,8 @@ pub(crate) struct Release {
     pub name: String,
     pub sha256: [u8; 32],
     pub size: u64,
+    /// What changed, in plain words: the release page's change list.
+    pub notes: Vec<String>,
 }
 
 /// The release `manifest` describes for `platform`, when `signature` (base64)
@@ -179,6 +183,7 @@ pub(crate) fn verified_release(
         name: file.name.clone(),
         sha256,
         size: file.size,
+        notes: manifest.notes,
     })
 }
 
@@ -239,6 +244,8 @@ mod tests {
             );
             assert_eq!(release.key, format!("releases/v1.2.3/{}", release.name));
             assert_eq!(release.size, size);
+            assert_eq!(release.notes.len(), 6);
+            assert_eq!(release.notes[3], "Emphasis and links lose their Markdown.");
         }
     }
 

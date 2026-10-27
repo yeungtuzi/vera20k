@@ -19,6 +19,9 @@ builds and releases. This skill is the maintainer's order of steps and the page 
   words: about 5 to 9 bullets, the most visible first, small fixes grouped, internal work
   (tests, refactors, version bumps, rules plumbing with no effect yet) left out, then an
   "All changes" compare link. Check each bullet against its pull request's description.
+- Installed games list these bullets in their update offer: publishing signs the bullets
+  under the first "Changes" heading into the download manifest, so later edits to the page
+  do not reach the game.
 - One line per paragraph or bullet: GitHub shows every line break in release notes.
 - Name contributors by GitHub login without `@`, which would notify them.
 

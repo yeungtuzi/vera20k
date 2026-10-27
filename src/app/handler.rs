@@ -1381,6 +1381,8 @@ impl ApplicationHandler for App {
                 if Self::campaign_score_shell_active(state) {
                     Self::handle_campaign_score_mouse_move(state);
                 }
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                crate::app::updater::notes::cursor_moved(state);
                 if state.frontend.screen == GameScreen::MainMenu
                     && state.frontend.main_menu_shell_error.is_none()
                     && !Self::menu_page_active(state)
@@ -1599,6 +1601,10 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(pos) => (pos.y as f32 / 30.0).clamp(-3.0, 3.0),
                 };
                 if crate::app::frontend::shell_transition::blocks_shell_input(state) {
+                    return;
+                }
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                if crate::app::updater::notes::wheel(state, lines) {
                     return;
                 }
                 if state.frontend.keyboard_dialog.is_some() {

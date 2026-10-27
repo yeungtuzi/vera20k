@@ -16,7 +16,7 @@ fn tone_rgb(tone: ListFrameTone) -> [f32; 3] {
 /// and row) and, when the rows overflow, the scrollbar child. The native
 /// list also darkens the background under its rows by one RGB565 unit; that
 /// is not drawn here.
-pub(super) fn paint_list(
+pub(crate) fn paint_list(
     out: &mut Vec<SpriteInstance>,
     atlas: &SkirmishShellChromeAtlas,
     geometry: ShellListGeometry,

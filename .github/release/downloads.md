@@ -7,7 +7,9 @@ Cloudflare R2. It never rebuilds or uploads game data.
 The publisher verifies the release tag, GitHub size/SHA-256 and the build
 attestation. It uploads immutable `releases/v<version>/<filename>` objects,
 reads them back and checks their bytes, then stores `manifest.json` for that
-version and `manifest.json.sig`, its Ed25519 signature. Finally it
+version and `manifest.json.sig`, its Ed25519 signature. The manifest's `notes`
+are the release page's change list in plain text, the bullets under its first
+"Changes" heading, which the game's update offer lists. Finally it
 conditionally replaces `latest.json`, only if this is GitHub's latest stable
 release and the pointer would not move backward. `latest.json` holds the same
 bytes as the version's `manifest.json`, so the website's three

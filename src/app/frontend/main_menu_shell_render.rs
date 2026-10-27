@@ -861,13 +861,21 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
     // VERA's updater boxes draw Red Alert 2's art, the others gamemd's.
     let background = match message_box.purpose {
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-        ShellMessageBoxPurpose::UpdateOffer
+        ShellMessageBoxPurpose::UpdateOffer(_)
         | ShellMessageBoxPurpose::UpdateProgress
         | ShellMessageBoxPurpose::UpdateFailed => atlas.ra2_dialog_background,
         _ => None,
     }
     .or_else(|| atlas.mode_two_dialog_background(None));
     let layout = shell_layout::shell_message_box_layout(state, modal_state.kind());
+    // The updater's offer lists what changed (`app::updater::notes`).
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    let notes = match &message_box.purpose {
+        ShellMessageBoxPurpose::UpdateOffer(notes) => {
+            notes.geometry(&layout).map(|geometry| (notes, geometry))
+        }
+        _ => None,
+    };
     let pressed = state.frontend.shell_controller.pressed();
     let ok_pressed = pressed == Some(modal::control::OK);
     let frames = crate::app::frontend::skirmish_shell_render::type3_button_frames(atlas);
@@ -917,7 +925,23 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
             path_a_reveal: None,
         });
     }
-    Some(shell_paint::paint_modal_shp(
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    if let Some((notes, geometry)) = &notes {
+        labels.extend(
+            notes
+                .texts(geometry, layout.scale.factor())
+                .into_iter()
+                .map(|(text, rect)| PaintLabel {
+                    text: text.into(),
+                    rect,
+                    align: ShellAlign::NONE,
+                    rgb: SHELL_TEXT_RGB_ENABLED,
+                    path_a_reveal: None,
+                }),
+        );
+    }
+    #[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), allow(unused_mut))]
+    let mut draw = shell_paint::paint_modal_shp(
         &state.renderer.bit_font,
         background,
         frames,
@@ -926,7 +950,21 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
         &labels,
         layout.scale,
         EXIT_CONFIRM_MODAL_DEPTHS,
-    ))
+    );
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    if let Some((notes, geometry)) = notes {
+        crate::app::frontend::skirmish_shell_render::paint_list(
+            &mut draw.sprites,
+            atlas,
+            geometry,
+            notes.top(),
+            None,
+            notes.pressed_part(),
+            false,
+            layout.scale,
+        );
+    }
+    Some(draw)
 }
 
 #[cfg(test)]

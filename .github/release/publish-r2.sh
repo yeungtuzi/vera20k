@@ -85,8 +85,30 @@ jq -e --arg tag "$tag" --arg a "${names[0]}" --arg b "${names[1]}" --arg c "${na
     and (.digest | type == "string") and (.digest | test("^sha256:[0-9a-f]{64}$")))
 ' "$work/release.json" >/dev/null || die 'release must contain exactly three published stable installers with SHA-256 digests'
 commit=$(tag_commit)
-jq -nS --arg version "$version" --arg tag "$tag" --arg commit "$commit" \
-  '{version:$version,tag:$tag,commit:$commit,files:{}}' > "$work/manifest.json"
+# The release page's change list, which the game's update offer shows: the
+# bullets under its first "Changes" heading (.github/release/notes.sh), without
+# Markdown links, emphasis or code marks. At most 12 of 300 characters keep the
+# manifest far below the game's 64 KiB limit.
+notes=$(jq -c '
+  (.body // "") | gsub("\r"; "") | split("\n")
+  | (first(range(length) as $i | select(.[$i] | test("^#{1,6} +Changes")) | $i) // null) as $heading
+  | if $heading == null then [] else
+      reduce .[$heading + 1:][] as $line ({rows: [], done: false};
+        if .done then .
+        elif ($line | test("^[-*] ")) then .rows += [$line]
+        elif .rows == [] and ($line | test("^\\s*$")) then .
+        else .done = true end)
+      | .rows
+    end
+  | map(sub("^[-*] +"; "")
+        | gsub("\\[(?<text>[^\\]]*)\\]\\([^)]*\\)"; "\(.text)")
+        | gsub("\\*\\*|__|`"; "")
+        | sub("^\\s+"; "") | sub("\\s+$"; "")
+        | .[:300])
+  | map(select(length > 0)) | .[:12]
+' "$work/release.json") || die 'cannot read the release notes'
+jq -nS --arg version "$version" --arg tag "$tag" --arg commit "$commit" --argjson notes "$notes" \
+  '{version:$version,tag:$tag,commit:$commit,notes:$notes,files:{}}' > "$work/manifest.json"
 
 # Complete every GitHub download/provenance check before writing any R2 object.
 for index in 0 1 2; do
