@@ -191,7 +191,8 @@ def install(work: Path, release: Path, program: Path, game_folder: Path) -> Game
     run(release, "--appimage-extract", cwd=extracted, stdout=subprocess.DEVNULL)
     package = work / "old-package"
     package.mkdir()
-    shutil.copyfile(program, package / "vera20k")
+    # copy, not copyfile: appimage.sh keeps the program's executable bit.
+    shutil.copy(program, package / "vera20k")
     for name in ("README.txt", "LICENSE-GPL", "LGPL-2.1-or-later.txt", "THIRD_PARTY_LICENSES.html"):
         shutil.copyfile(extracted / "squashfs-root/usr/share/doc/vera20k" / name, package / name)
     image = work / "VERA20K.AppImage"
