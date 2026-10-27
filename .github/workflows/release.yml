@@ -668,9 +668,9 @@ jobs:
     # "none" stops here, with the installers left as workflow artifacts.
     if: needs.prepare.outputs.publish != 'none'
     #
-    # MAINTENANCE DECISION, left to the maintainers: `needs: [build, test]`
-    # means one platform failing to build or to pass its tests stops the
-    # release. That is deliberate -- a release that silently lacks macOS is
+    # MAINTENANCE DECISION, left to the maintainers: `needs: [build, test,
+    # update-test]` means one platform failing to build, to pass its tests or
+    # to update itself stops the release. That is deliberate -- a release that silently lacks macOS is
     # worse than no release -- but hosted runners do drop jobs ("not acquired
     # by Runner of type hosted"), and then a fully built Windows and Linux are
     # discarded too.

@@ -117,9 +117,12 @@ def openssl() -> str:
 
 
 def bash() -> str:
-    """Git's bash on Windows, never the WSL launcher in System32."""
+    """Git's bash on Windows, never the WSL launcher in System32. Git is in
+    Git's cmd folder, or in mingw64/bin when this runs under Git's bash."""
     if os.name == "nt" and (git := shutil.which("git")):
-        return str(Path(git).resolve().parents[1] / "bin/bash.exe")
+        for folder in Path(git).resolve().parents:
+            if (folder / "bin/bash.exe").is_file():
+                return str(folder / "bin/bash.exe")
     return "bash"
 
 

@@ -311,17 +311,22 @@ def command_fixture(directory: Path) -> None:
         (directory / "update-key.pub").write_text(public_key(key / "signing-key.pem") + "\n")
 
 
+def absolute(value: str) -> Path:
+    """A command-line path made absolute, since the installers run in other folders."""
+    return Path(value).resolve()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     key = commands.add_parser("key", help="make a signing key and print its public half")
     key.add_argument("directory", type=Path)
     test = commands.add_parser("run", help="update an installed older build to the release")
-    test.add_argument("--key", type=Path, required=True, help="the signing key's PEM")
-    test.add_argument("--release", type=Path, required=True, help="this platform's release installer")
+    test.add_argument("--key", type=absolute, required=True, help="the signing key's PEM")
+    test.add_argument("--release", type=absolute, required=True, help="this platform's release installer")
     test.add_argument("--version", required=True, help="the release's version")
-    test.add_argument("--program", type=Path, required=True, help="the older test build's program")
-    test.add_argument("--game", type=Path, help="a game folder; default: the installer's stand-in")
+    test.add_argument("--program", type=absolute, required=True, help="the older test build's program")
+    test.add_argument("--game", type=absolute, help="a game folder; default: the installer's stand-in")
     test.add_argument("--attended", action="store_true", help="a person answers the offer")
     test.add_argument("--rate", type=float, help="serve at most this many bytes a second")
     test.add_argument("--scenario", nargs="+", choices=["manifest", "installer", "update"],

@@ -1005,6 +1005,8 @@ impl App {
                     crate::app::loading::pump::LoadingProgressState::standard_skirmish(),
                 frontend_rules: startup_rules,
                 shell_preview_overlay_registry: None,
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                updater: Default::default(),
                 skirmish_shell_state,
                 choose_map_last_mode_row: None,
                 multiplayer_shell_runtime,
@@ -1099,8 +1101,6 @@ impl App {
             process_assets,
             audio: startup_audio_runtime,
             persistence: crate::app::persistence::PersistenceState::new(options_profile),
-            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-            updater: Default::default(),
             diag: crate::app::diagnostics::state::DiagnosticsState::new(
                 match crate::sim::parity_digest::ParityDigestSink::from_env() {
                     Ok(sink) => {

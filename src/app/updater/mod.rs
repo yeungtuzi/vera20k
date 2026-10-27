@@ -15,6 +15,7 @@ mod manifest;
 
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use crate::app::App;
@@ -67,34 +68,34 @@ enum Phase {
 /// Advance the updater; the deadline keeps the event loop polling while a
 /// worker runs.
 pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
-    match std::mem::take(&mut state.updater.phase) {
+    match std::mem::take(&mut state.frontend.updater.phase) {
         Phase::NotStarted => {
-            state.updater.phase = start(state);
-            matches!(state.updater.phase, Phase::Checking { .. })
+            state.frontend.updater.phase = start(state);
+            matches!(state.frontend.updater.phase, Phase::Checking { .. })
                 .then(|| Instant::now() + POLL_INTERVAL)
         }
         Phase::Checking { package, result } => match result.try_recv() {
             Ok(Ok(Some(release))) => {
                 log::info!("Updater: VERA20k {} is available", release.version);
-                state.updater.phase = Phase::Found { package, release };
+                state.frontend.updater.phase = Phase::Found { package, release };
                 poll(state)
             }
             Ok(Ok(None)) => {
                 log::info!("Updater: no newer release");
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 None
             }
             Ok(Err(error)) => {
                 log::info!("Updater: check failed: {error:#}");
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 None
             }
             Err(TryRecvError::Empty) => {
-                state.updater.phase = Phase::Checking { package, result };
+                state.frontend.updater.phase = Phase::Checking { package, result };
                 Some(Instant::now() + POLL_INTERVAL)
             }
             Err(TryRecvError::Disconnected) => {
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 None
             }
         },
@@ -104,13 +105,13 @@ pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
         }
         Phase::Found { package, release } => {
             if main_menu_idle(state) {
-                state.updater.phase = Phase::Offered { package, release };
+                state.frontend.updater.phase = Phase::Offered { package, release };
                 App::leave_shell_dialog(
                     state,
                     crate::app::frontend::shell_transition::ShellExitThen::UpdateOffer,
                 );
             } else {
-                state.updater.phase = Phase::Found { package, release };
+                state.frontend.updater.phase = Phase::Found { package, release };
             }
             None
         }
@@ -120,17 +121,18 @@ pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
             result,
         } => match result.try_recv() {
             Ok(Ok(mut finish)) => {
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 restart(state, &release, &mut finish);
                 None
             }
-            Ok(Err(error)) if error.is::<fetch::Cancelled>() => {
-                state.updater.phase = Phase::Finished;
+            // Whatever stopped a download the player cancelled, say nothing.
+            Ok(Err(_)) if progress.cancel.load(Ordering::Relaxed) => {
+                state.frontend.updater.phase = Phase::Finished;
                 None
             }
             Ok(Err(error)) => {
                 log::warn!("Updater: updating to {} failed: {error:#}", release.version);
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 show_failure(state, release.version, &error);
                 None
             }
@@ -140,11 +142,11 @@ pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
                 {
                     message_box.labels.title = progress_text(
                         release.version,
-                        progress.received.load(std::sync::atomic::Ordering::Relaxed),
+                        progress.received.load(Ordering::Relaxed),
                         release.size,
                     );
                 }
-                state.updater.phase = Phase::Downloading {
+                state.frontend.updater.phase = Phase::Downloading {
                     release,
                     progress,
                     result,
@@ -152,12 +154,12 @@ pub(crate) fn poll(state: &mut AppState) -> Option<Instant> {
                 Some(Instant::now() + POLL_INTERVAL)
             }
             Err(TryRecvError::Disconnected) => {
-                state.updater.phase = Phase::Finished;
+                state.frontend.updater.phase = Phase::Finished;
                 None
             }
         },
         phase => {
-            state.updater.phase = phase;
+            state.frontend.updater.phase = phase;
             None
         }
     }
@@ -205,7 +207,7 @@ fn main_menu_idle(state: &AppState) -> bool {
 /// The menu has slid out: ask over the empty shell backdrop, as Exit Game
 /// does (`App::open_exit_confirm`).
 pub(crate) fn open_offer(state: &mut AppState) {
-    let Phase::Offered { release, .. } = &state.updater.phase else {
+    let Phase::Offered { release, .. } = &state.frontend.updater.phase else {
         return;
     };
     let labels = ShellMessageBoxLabels {
@@ -231,10 +233,11 @@ pub(crate) fn open_offer(state: &mut AppState) {
 
 /// The offer's answer: 0 Update, 2 Skip This Version, 1 (or Esc/Enter) Later.
 pub(crate) fn answer_offer(state: &mut AppState, result: ModalResult) {
-    let Phase::Offered { package, release } = std::mem::take(&mut state.updater.phase) else {
+    let Phase::Offered { package, release } = std::mem::take(&mut state.frontend.updater.phase)
+    else {
         return;
     };
-    state.updater.phase = Phase::Finished;
+    state.frontend.updater.phase = Phase::Finished;
     match result {
         ModalResult::MessageBox(0) => download(state, package, release),
         ModalResult::MessageBox(2) => {
@@ -266,10 +269,7 @@ fn download(state: &mut AppState, package: Package, release: Release) {
                 })
                 .and_then(|installer| {
                     // Past this point the update is committed: Cancel no longer applies.
-                    anyhow::ensure!(
-                        !progress.cancel.load(std::sync::atomic::Ordering::Relaxed),
-                        fetch::Cancelled
-                    );
+                    anyhow::ensure!(!progress.cancel.load(Ordering::Relaxed), fetch::Cancelled);
                     install::stage(&package, &installer)
                 });
             let _ = sender.send(finish);
@@ -282,12 +282,21 @@ fn download(state: &mut AppState, package: Package, release: Release) {
         show_failure(state, release.version, &anyhow::Error::from(error));
         return;
     }
+    open_progress(state, &release, 0);
+    state.frontend.updater.phase = Phase::Downloading {
+        release,
+        progress,
+        result,
+    };
+}
+
+fn open_progress(state: &mut AppState, release: &Release, received: u64) {
     let cancel = App::csf_label(state, "TXT_CANCEL", "Cancel");
     App::open_shell_message_box(
         state,
         ShellMessageBox {
             labels: ShellMessageBoxLabels {
-                title: progress_text(release.version, 0, release.size),
+                title: progress_text(release.version, received, release.size),
                 confirm: cancel,
                 third: String::new(),
                 cancel: String::new(),
@@ -295,22 +304,26 @@ fn download(state: &mut AppState, package: Package, release: Release) {
             purpose: ShellMessageBoxPurpose::UpdateProgress,
         },
     );
-    state.updater.phase = Phase::Downloading {
-        release,
-        progress,
-        result,
-    };
 }
 
-/// The progress box's button, Esc or Enter.
+/// The progress box's button, Esc or Enter. It stops the download; the
+/// worker's result still ends the update, so an install already under way
+/// finishes and restarts, and its box stays up until then.
 pub(crate) fn cancel_download(state: &mut AppState) {
-    if let Phase::Downloading { progress, .. } = std::mem::take(&mut state.updater.phase) {
-        progress
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        log::info!("Updater: download cancelled");
+    let Phase::Downloading {
+        release, progress, ..
+    } = &state.frontend.updater.phase
+    else {
+        return;
+    };
+    let received = progress.received.load(Ordering::Relaxed);
+    if received >= release.size {
+        let release = release.clone();
+        open_progress(state, &release, received);
+        return;
     }
-    state.updater.phase = Phase::Finished;
+    progress.cancel.store(true, Ordering::Relaxed);
+    log::info!("Updater: download cancelled");
     state.platform.window.request_redraw();
 }
 
@@ -331,7 +344,10 @@ fn progress_text(version: Version, received: u64, size: u64) -> String {
 /// it, then quit the way Exit Game does.
 fn restart(state: &mut AppState, release: &Release, finish: &mut Command) {
     match finish.spawn() {
-        Ok(_) => {
+        Ok(child) => {
+            // The macOS and Linux helper starts the new version when its
+            // standard input ends, which this process's exit closes.
+            std::mem::forget(child);
             log::info!("Updater: restarting into VERA20k {}", release.version);
             App::confirm_quit(state);
         }

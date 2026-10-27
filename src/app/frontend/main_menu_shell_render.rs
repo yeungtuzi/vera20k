@@ -852,9 +852,21 @@ const EXIT_CONFIRM_MODAL_DEPTHS: shell_paint::ModalDepths = shell_paint::ModalDe
 /// pressed button is read from the shared shell controller (its top dialog is the
 /// modal while open). Returns `None` when the modal is closed or its art is absent.
 fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::ModalDraw> {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    use crate::app::frontend::state::ShellMessageBoxPurpose;
     use crate::ui::shell::modal;
-    let modal_state = &state.frontend.shell_message_box.as_ref()?.labels;
+    let message_box = state.frontend.shell_message_box.as_ref()?;
+    let modal_state = &message_box.labels;
     let atlas = state.frontend.skirmish_shell_chrome.as_ref()?;
+    // VERA's updater boxes draw Red Alert 2's art, the others gamemd's.
+    let background = match message_box.purpose {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        ShellMessageBoxPurpose::UpdateOffer
+        | ShellMessageBoxPurpose::UpdateProgress
+        | ShellMessageBoxPurpose::UpdateFailed => atlas.ra2_dialog_background,
+        _ => None,
+    }
+    .or_else(|| atlas.mode_two_dialog_background(None));
     let layout = shell_layout::shell_message_box_layout(state, modal_state.kind());
     let pressed = state.frontend.shell_controller.pressed();
     let ok_pressed = pressed == Some(modal::control::OK);
@@ -907,7 +919,7 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
     }
     Some(shell_paint::paint_modal_shp(
         &state.renderer.bit_font,
-        atlas.mode_two_dialog_background(None),
+        background,
         frames,
         layout.dialog,
         &buttons,

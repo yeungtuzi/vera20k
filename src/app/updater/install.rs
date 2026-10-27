@@ -9,10 +9,14 @@
 //!   bundle's place; the old bundle is deleted once this process has exited.
 //! - Linux: the new AppImage replaces the running one's file.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
+
+/// VERA's Inno Setup AppId (`.github/release/windows/vera20k.iss`).
+const VERA_APP_ID: &[u8] = b"{9C9BFC32-A7B8-48ED-A428-72333354BDDB}";
 
 /// A reason the player can act on, shown instead of the generic failure.
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +26,7 @@ pub(super) struct Hint(pub &'static str);
 /// The release package this process runs from: what an update replaces.
 #[derive(Debug, Clone)]
 pub(super) enum Package {
-    /// The Inno Setup install folder: vera20k.exe beside its uninstaller.
+    /// The folder VERA's setup installed vera20k.exe in.
     Windows(PathBuf),
     /// The app bundle, normally /Applications/VERA20K.app.
     MacApp(PathBuf),
@@ -34,15 +38,26 @@ pub(super) fn package() -> Option<Package> {
     if cfg!(target_os = "windows") {
         let executable = std::env::current_exe().ok()?;
         let folder = executable.parent()?;
-        folder
-            .join("unins000.exe")
-            .is_file()
-            .then(|| Package::Windows(folder.to_path_buf()))
+        installed_by_vera_setup(folder).then(|| Package::Windows(folder.to_path_buf()))
     } else if cfg!(target_os = "macos") {
         crate::app::app_bundle::package_path().map(Package::MacApp)
     } else {
         crate::app::app_bundle::package_path().map(Package::AppImage)
     }
+}
+
+/// Whether VERA's setup installed `folder`: the uninstaller there is VERA's,
+/// not another program's that vera20k.exe was copied beside, whose folder the
+/// setup would otherwise install into. Inno Setup's uninstall data starts
+/// with a 64-byte ID, then the AppId, NUL-terminated (`TUninstallLogHeader`,
+/// Projects/Src/Setup.UninstallLog.pas).
+fn installed_by_vera_setup(folder: &Path) -> bool {
+    let mut header = [0; 64 + 128];
+    let read = std::fs::File::open(folder.join("unins000.dat"))
+        .and_then(|mut data| data.read_exact(&mut header));
+    read.is_ok()
+        && header.starts_with(b"Inno Setup Uninstall Log (b)")
+        && header[64..].split(|&byte| byte == 0).next() == Some(VERA_APP_ID)
 }
 
 /// Where installers download to, replaced by each download: in the player's
@@ -200,23 +215,25 @@ fn make_executable(_: &Path) -> std::io::Result<()> {
 }
 
 /// A detached shell that waits for this process to exit, removes `cleanup`,
-/// then runs `program` with its arguments and environment changes.
+/// then runs `program` with its arguments and environment changes. It waits
+/// for the end of its piped standard input, whose other end this process
+/// keeps open (`restart`): that end closes when this process exits, however
+/// it exits and whether or not its parent has reaped it.
 fn after_exit(program: &Command, cleanup: Option<&Path>) -> Command {
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(
-            "pid=$1 cleanup=$2; shift 2\n\
-             while kill -0 \"$pid\" 2>/dev/null; do sleep 0.2; done\n\
+            "cleanup=$1; shift\n\
+             while read -r line; do :; done\n\
              [ -z \"$cleanup\" ] || rm -rf -- \"$cleanup\"\n\
-             exec \"$@\"",
+             exec \"$@\" </dev/null",
         )
         .arg("vera20k-restart")
-        .arg(std::process::id().to_string())
         .arg(cleanup.map_or_else(Default::default, Path::as_os_str))
         .arg(program.get_program())
         .args(program.get_args())
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (variable, value) in program.get_envs() {
@@ -243,4 +260,48 @@ fn run(command: &mut Command) -> Result<()> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_vera_setups_uninstaller_marks_its_install_folder() {
+        let folder =
+            std::env::temp_dir().join(format!("vera20k-update-install-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let write_uninstall_data = |app_id: &[u8]| {
+            let mut header = b"Inno Setup Uninstall Log (b) 64-bit".to_vec();
+            header.resize(64, 0);
+            header.extend_from_slice(app_id);
+            header.resize(448, 0);
+            std::fs::write(folder.join("unins000.dat"), header).unwrap();
+        };
+        write_uninstall_data(b"{1B2C3D4E-0000-4000-8000-000000000000}");
+        assert!(!installed_by_vera_setup(&folder));
+        write_uninstall_data(VERA_APP_ID);
+        assert!(installed_by_vera_setup(&folder));
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_waits_until_this_process_lets_go_of_it() {
+        let folder =
+            std::env::temp_dir().join(format!("vera20k-update-restart-{}", std::process::id()));
+        let staging = folder.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let started = folder.join("started");
+        let mut start = Command::new("touch");
+        start.arg(&started);
+        let mut helper = after_exit(&start, Some(&staging)).spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!started.exists() && staging.exists());
+        // What this process exiting does to the helper's standard input.
+        drop(helper.stdin.take());
+        helper.wait().unwrap();
+        assert!(started.exists() && !staging.exists());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 }

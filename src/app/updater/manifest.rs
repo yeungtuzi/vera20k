@@ -210,12 +210,17 @@ mod tests {
 
     // Published by the real `.github/release/publish-r2.sh`, signed with a
     // throwaway key: `python -m tools.update_test fixture src/app/updater/fixtures`.
-    const MANIFEST: &[u8] = include_bytes!("fixtures/manifest.json");
-    const SIGNATURE: &[u8] = include_bytes!("fixtures/manifest.json.sig");
+    fn manifest() -> &'static [u8] {
+        crate::test_fixture::bytes("src/app/updater/fixtures/manifest.json")
+    }
+
+    fn signature() -> &'static [u8] {
+        crate::test_fixture::bytes("src/app/updater/fixtures/manifest.json.sig")
+    }
 
     fn public_key() -> [u8; 32] {
         let key = base64::engine::general_purpose::STANDARD
-            .decode(include_str!("fixtures/update-key.pub").trim())
+            .decode(crate::test_fixture::text("src/app/updater/fixtures/update-key.pub").trim())
             .unwrap();
         key.try_into().unwrap()
     }
@@ -223,9 +228,10 @@ mod tests {
     #[test]
     fn the_publishers_signed_manifest_names_each_platforms_installer() {
         let version = Version::parse("1.2.3").unwrap();
-        assert_eq!(pointer(MANIFEST).unwrap(), (version, "v1.2.3".into()));
+        assert_eq!(pointer(manifest()).unwrap(), (version, "v1.2.3".into()));
         for (platform, size) in [("windows", 45), ("macos", 39), ("linux", 42)] {
-            let release = verified_release(MANIFEST, SIGNATURE, &public_key(), platform).unwrap();
+            let release =
+                verified_release(manifest(), signature(), &public_key(), platform).unwrap();
             assert_eq!(release.version, version);
             assert_eq!(
                 release.name,
@@ -239,16 +245,16 @@ mod tests {
     #[test]
     fn a_changed_manifest_or_another_key_is_refused() {
         // The Linux installer's SHA-256 begins 7b115c.
-        let at = MANIFEST
+        let at = manifest()
             .windows(6)
             .position(|digits| digits == b"7b115c")
             .unwrap();
-        let mut changed = MANIFEST.to_vec();
+        let mut changed = manifest().to_vec();
         changed[at] = b'8';
-        assert!(verified_release(&changed, SIGNATURE, &public_key(), "linux").is_err());
+        assert!(verified_release(&changed, signature(), &public_key(), "linux").is_err());
         let mut other = public_key();
         other[31] ^= 1;
-        assert!(verified_release(MANIFEST, SIGNATURE, &other, "linux").is_err());
+        assert!(verified_release(manifest(), signature(), &other, "linux").is_err());
     }
 
     #[test]

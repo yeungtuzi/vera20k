@@ -229,6 +229,9 @@ pub(crate) struct FrontendState {
     /// persistence of the old app field. Match paths read the runtime-bound
     /// copy via `overlay_registry()`.
     pub(crate) shell_preview_overlay_registry: Option<OverlayTypeRegistry>,
+    /// The release check, its main-menu offer and the download (desktop only).
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    pub(crate) updater: crate::app::updater::Updater,
 }
 
 /// One open shell message box `0x120` and the caller its result returns to.

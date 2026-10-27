@@ -49,6 +49,21 @@ fn render_side_dialog_art(
     render_shp_entry_labeled(assets, image, &label, &palette, 0)
 }
 
+/// Red Alert 2's own neutral mode-2 background, a Desolator in a burning city:
+/// `PUDLGBGN.SHP` through `DIALOG.PAL`, both from `ra2.mix -> local.mix`. Yuri's
+/// Revenge's copies of the name win the ordinary lookup. VERA's updater boxes
+/// draw it; gamemd has no updater.
+fn render_ra2_dialog_art(assets: &AssetManager) -> Option<RenderedShellEntry> {
+    let (_, archive) = assets.archive_with_source("ra2.mix -> local.mix")?;
+    let palette = Palette::from_bytes(archive.get_by_name("DIALOG.PAL")?).ok()?;
+    render_shp_bytes(
+        archive.get_by_name("PUDLGBGN.SHP")?,
+        "pudlgbgn.shp#ra2",
+        &palette,
+        0,
+    )
+}
+
 /// The atlas label of each mode-2 dialog background slot: the stock art, or
 /// for the three side slots the rendered side pair. The no-session slot 0
 /// (`0x62225F`) is not patched and keeps `PUDLGBGN`.
@@ -152,6 +167,8 @@ pub struct SkirmishShellChromeAtlas {
     pub lower_side_640_lwscrns: Option<SkirmishShellChromeEntry>,
     pub lower_side_large_lwscrnl: Option<SkirmishShellChromeEntry>,
     mode_two_dialog_backgrounds: [Option<SkirmishShellChromeEntry>; 4],
+    /// Red Alert 2's neutral dialog background ([`render_ra2_dialog_art`]).
+    pub ra2_dialog_background: Option<SkirmishShellChromeEntry>,
     pub button_up_left_30: Option<SkirmishShellChromeEntry>,
     pub button_up_mid_30: Option<SkirmishShellChromeEntry>,
     pub button_up_right_30: Option<SkirmishShellChromeEntry>,
@@ -532,6 +549,11 @@ pub fn build_skirmish_shell_chrome_atlas(
             rendered.push(entry);
             label
         });
+    push_optional(
+        &mut rendered,
+        render_ra2_dialog_art(assets),
+        "PUDLGBGN.SHP from ra2.mix -> local.mix",
+    );
     rendered.push(mandatory_shp(
         assets,
         "SDMPBTN.SHP",
@@ -762,6 +784,7 @@ pub fn build_skirmish_shell_chrome_atlas(
         lower_side_large_lwscrnl: by_label.get("lwscrnl.shp").copied(),
         mode_two_dialog_backgrounds: mode_two_dialog_labels(side_dialog_art.as_deref())
             .map(|label| by_label.get(&label).copied()),
+        ra2_dialog_background: by_label.get("pudlgbgn.shp#ra2").copied(),
         button_up_left_30: by_label.get("bue_li30.pcx").copied(),
         button_up_mid_30: by_label.get("bue_mi30.pcx").copied(),
         button_up_right_30: by_label.get("bue_ri30.pcx").copied(),
@@ -927,7 +950,15 @@ fn render_shp_entry_labeled(
     palette: &Palette,
     frame: usize,
 ) -> Option<RenderedShellEntry> {
-    let bytes = assets.get_ref(file_name)?;
+    render_shp_bytes(assets.get_ref(file_name)?, label, palette, frame)
+}
+
+fn render_shp_bytes(
+    bytes: &[u8],
+    label: &str,
+    palette: &Palette,
+    frame: usize,
+) -> Option<RenderedShellEntry> {
     let shp = ShpFile::from_bytes(bytes).ok()?;
     if frame >= shp.frames.len() {
         return None;
@@ -1323,6 +1354,20 @@ mod tests {
             [side.label.clone(), side.label.clone(), side.label]
         );
         assert_ne!(labels[1], stock[1]);
+    }
+
+    /// The updater's art is Red Alert 2's own copy, not the one the ordinary
+    /// lookup finds.
+    #[test]
+    fn ra2_dialog_art_is_red_alert_2s_own_copy() {
+        let Some((_, assets)) = crate::rules::retail_ini_fixture::retail_assets() else {
+            return;
+        };
+        let ra2 = super::render_ra2_dialog_art(&assets).expect("RA2's dialog art renders");
+        let palette = load_named_palette(&assets, "DIALOGN.PAL").unwrap();
+        let active = render_shp_entry(&assets, "PUDLGBGN.SHP", &palette, 0).unwrap();
+        assert_eq!((ra2.width, ra2.height), (451, 326));
+        assert_ne!(ra2.rgba, active.rgba);
     }
 
     #[test]

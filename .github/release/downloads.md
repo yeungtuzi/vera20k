@@ -31,12 +31,13 @@ half is `update-key.pub` (base64 of the raw 32 bytes). The publisher refuses to
 upload anything when the two do not match. Keep a private backup of the key:
 installed games accept only updates it signed, so after losing or replacing it
 they stop seeing updates until their players install, by hand, a release that
-carries the new `update-key.pub`. To make a key:
+carries the new `update-key.pub`. To make a key outside the repository,
+readable only by you:
 
 ```sh
-openssl genpkey -algorithm ed25519 -out update-signing-key.pem
-openssl pkey -in update-signing-key.pem -pubout -outform DER | tail -c 32 | openssl base64 -A
-gh secret set UPDATE_SIGNING_KEY --repo YuriPlanet/vera20k < update-signing-key.pem
+(umask 077; openssl genpkey -algorithm ed25519 -out ~/vera20k-update-signing-key.pem)
+openssl pkey -in ~/vera20k-update-signing-key.pem -pubout -outform DER | tail -c 32 | openssl base64 -A
+gh secret set UPDATE_SIGNING_KEY --repo YuriPlanet/vera20k < ~/vera20k-update-signing-key.pem
 ```
 
 The Ubuntu 24.04 runner supplies `gh`, AWS CLI, `jq` and OpenSSL 3. To retry,
@@ -59,7 +60,10 @@ R2 cannot provide one cross-service transaction; the publisher rechecks the
 latest release immediately before updating the pointer.
 
 Tests: `python -m unittest tools.test_release_downloads`; the repository's
-`python -m tools.run_tests` includes these local CLI fixtures.
+`python -m tools.run_tests` includes these local CLI fixtures. Each dev build's
+`update-test` job publishes it with this script and a throwaway key
+(`tools/update_test.py`), then updates an installed older build to it on every
+platform.
 
 References: [R2 tokens](https://developers.cloudflare.com/r2/api/tokens/),
 [AWS CLI access](https://developers.cloudflare.com/r2/examples/aws/aws-cli/),

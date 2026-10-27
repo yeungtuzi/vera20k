@@ -32,9 +32,6 @@ pub(crate) struct AppState {
     pub(crate) audio: crate::app::audio_runtime::AppAudioRuntime,
     /// Save repository, cached listing, and last save/load metadata.
     pub(crate) persistence: crate::app::persistence::PersistenceState,
-    /// The release check, offer and download (desktop only).
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-    pub(crate) updater: crate::app::updater::Updater,
 }
 
 /// Drop app-owned scenario-exit runtime and failure modal after a successful world replacement.

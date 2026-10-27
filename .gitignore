@@ -86,6 +86,8 @@ Thumbs.db
 .mcp.json
 # Cloudflare CLI cache: holds the account ID and email wherever `cf` runs.
 .cloudflare/
+# Private keys, such as the update signing key (.github/release/downloads.md).
+*.pem
 /.claude/*
 !/.claude/skills/
 /.claude/skills/ghidra-up/
