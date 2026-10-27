@@ -600,12 +600,14 @@ jobs:
         with:
           python-version: '3.12'
       # The game's ALSA headers, the AppImage step's desktop-file-validate, and
-      # a virtual screen with a software Vulkan device to run the game on.
+      # a virtual screen with a software Vulkan device and the X keyboard
+      # library (README.txt.in) to run the game on.
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils xvfb mesa-vulkan-drivers
+          sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils xvfb mesa-vulkan-drivers \
+            libxkbcommon-x11-0
       - uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.target }}
