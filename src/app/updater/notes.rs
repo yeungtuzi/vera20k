@@ -16,7 +16,7 @@ use crate::ui::shell::list::{
 use crate::ui::shell::modal::{MessageBoxLayout, ModalKind};
 use crate::util::time::Instant;
 
-/// The caption above the list.
+/// The list's first row.
 const CAPTION: &str = "What's new:";
 /// Rows the list shows at once: from the lowest button's bottom up to below
 /// the question.
@@ -43,7 +43,8 @@ struct Row {
 }
 
 impl ReleaseNotes {
-    /// `notes` wrapped to the list's width, a bullet before each change.
+    /// A caption, then `notes` wrapped to the list's width, a bullet before
+    /// each change.
     pub(crate) fn new(font: &BitFont, notes: &[String]) -> Self {
         let indent = font.text_width(BULLET);
         let width = wrap_width().saturating_sub(indent);
@@ -64,6 +65,13 @@ impl ReleaseNotes {
                     },
                 });
             }
+        }
+        if !rows.is_empty() {
+            let caption = Row {
+                text: CAPTION.to_owned(),
+                indent: 0,
+            };
+            rows.insert(0, caption);
         }
         Self {
             rows,
@@ -94,29 +102,22 @@ impl ReleaseNotes {
         self.scroll.pressed_part()
     }
 
-    /// The caption's and each visible row's text with the rect it is drawn
-    /// in. A row's rect runs to the list's right edge: its text was wrapped
-    /// narrower, so a scaled rect's rounding never wraps it again.
+    /// Each visible row's text with the rect it is drawn in. The rect runs to
+    /// the list's right edge: the text was wrapped narrower, so a scaled
+    /// rect's rounding never wraps it again.
     pub(crate) fn texts(&self, geometry: &ShellListGeometry, scale: f32) -> Vec<(&str, RectPx)> {
-        let outer = geometry.outer;
-        let row_h = geometry.metrics.row_h;
-        let mut texts = vec![(
-            CAPTION,
-            RectPx::new(outer.x, outer.y - row_h, outer.w, row_h),
-        )];
-        let right = outer.x + outer.w - 1;
-        for (visible, row) in self
-            .rows
+        let right = geometry.outer.x + geometry.outer.w - 1;
+        self.rows
             .iter()
             .skip(self.top)
             .take(geometry.visible_rows)
             .enumerate()
-        {
-            let rect = geometry.row(visible);
-            let x = rect.x + ((TEXT_INSET + row.indent) as f32 * scale).round() as i32;
-            texts.push((row.text.as_str(), RectPx::new(x, rect.y, right - x, rect.h)));
-        }
-        texts
+            .map(|(visible, row)| {
+                let rect = geometry.row(visible);
+                let x = rect.x + ((TEXT_INSET + row.indent) as f32 * scale).round() as i32;
+                (row.text.as_str(), RectPx::new(x, rect.y, right - x, rect.h))
+            })
+            .collect()
     }
 }
 
@@ -235,17 +236,17 @@ mod tests {
                     host or join a game, and add AI opponents.";
         let notes = ReleaseNotes::new(&font, &[note.to_owned()]);
         let indent = font.text_width(BULLET) as i32;
-        assert!(notes.rows.len() > 2);
-        assert!(notes.rows[0].text.starts_with("\u{2022} Play online"));
-        assert!(notes.rows[1..].iter().all(|row| row.indent == indent));
+        assert!(notes.rows.len() > 3);
+        assert_eq!(notes.rows[0].text, CAPTION);
+        assert!(notes.rows[1].text.starts_with("\u{2022} Play online"));
+        assert!(notes.rows[2..].iter().all(|row| row.indent == indent));
         assert!(
             notes
                 .rows
                 .iter()
                 .all(|row| row.indent as u32 + font.text_width(&row.text) <= wrap_width())
         );
-        let words: Vec<&str> = notes
-            .rows
+        let words: Vec<&str> = notes.rows[1..]
             .iter()
             .map(|row| row.text.trim_start_matches(BULLET))
             .collect();

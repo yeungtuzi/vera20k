@@ -951,6 +951,7 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
         layout.scale,
         EXIT_CONFIRM_MODAL_DEPTHS,
     );
+    // The list lies on the dialog's picture, which has no list backing.
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     if let Some((notes, geometry)) = notes {
         crate::app::frontend::skirmish_shell_render::paint_list(
@@ -960,7 +961,7 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
             notes.top(),
             None,
             notes.pressed_part(),
-            false,
+            true,
             layout.scale,
         );
     }

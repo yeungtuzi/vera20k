@@ -15,7 +15,8 @@ fn tone_rgb(tone: ListFrameTone) -> [f32; 3] {
 /// frame rings around the window (the paint surface less its extra column
 /// and row) and, when the rows overflow, the scrollbar child. The native
 /// list also darkens the background under its rows by one RGB565 unit; that
-/// is not drawn here.
+/// is not drawn here. `solid_fill` backs the rows and the scrollbar's track
+/// with the panel color, for a list that no art backs.
 pub(crate) fn paint_list(
     out: &mut Vec<SpriteInstance>,
     atlas: &SkirmishShellChromeAtlas,
@@ -29,6 +30,10 @@ pub(crate) fn paint_list(
     let depth = SHELL_DROPDOWN_DEPTH - 0.00010;
     if solid_fill {
         push_solid_rect(out, atlas, geometry.content, SHELL_MODAL_PANEL_RGB, depth);
+        if let Some(bar) = geometry.scrollbar {
+            let track = scrollbar_interior(bar);
+            push_solid_rect(out, atlas, track, SHELL_MODAL_PANEL_RGB, depth);
+        }
     }
     if let Some(selected) = selected.filter(|i| *i >= top && *i < top + geometry.visible_rows) {
         push_solid_rect(
