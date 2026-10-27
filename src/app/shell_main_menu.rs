@@ -1285,6 +1285,12 @@ Details: {details}"
                 rect,
             });
         }
+        if let Some(rect) = layout.third {
+            feed.push(LaidOutControl {
+                id: modal::control::THIRD,
+                rect,
+            });
+        }
         Some((
             crate::ui::shell::descriptor::DialogId(kind.template_id(false)),
             feed,
@@ -1335,15 +1341,11 @@ Details: {details}"
             return;
         };
         match message_box.purpose {
-            // OK -> quit (result 0). Dismiss the confirmation first, persist
-            // settings to VERA.INI, then run the graceful cascade (music fade
-            // → trailing-voice wait → hard stop → exit) via render_frame instead
-            // of exiting immediately. The screen fade-to-black is sub-step 4b-ii-b.
+            // OK -> quit (result 0). The screen fade-to-black is sub-step 4b-ii-b.
             ShellMessageBoxPurpose::ExitGame
                 if result == crate::ui::shell::modal::ModalResult::MessageBox(0) =>
             {
-                let mut operations = AppStateConfirmedQuitOperations { state };
-                dispatch_shell_controller_confirmed_quit(&mut operations);
+                Self::confirm_quit(state);
             }
             // Cancel -> stay; close the modal via the controller pop (D-B3)
             // so mouse and Esc converge on the same teardown.
@@ -1363,7 +1365,31 @@ Details: {details}"
                 Self::close_shell_message_box_from_controller(state);
                 Self::advance_campaign_victory(state, *victory);
             }
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            ShellMessageBoxPurpose::UpdateOffer => {
+                Self::close_shell_message_box_from_controller(state);
+                crate::app::updater::answer_offer(state, result);
+            }
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            ShellMessageBoxPurpose::UpdateProgress => {
+                Self::close_shell_message_box_from_controller(state);
+                crate::app::updater::cancel_download(state);
+            }
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            ShellMessageBoxPurpose::UpdateFailed => {
+                Self::close_shell_message_box_from_controller(state);
+                state.platform.window.request_redraw();
+            }
         }
+    }
+
+    /// Exit Game's OK: dismiss the confirmation first, persist settings to
+    /// VERA.INI, then run the graceful cascade (music fade → trailing-voice
+    /// wait → hard stop → exit) via render_frame instead of exiting
+    /// immediately. The updater quits the same way once its update is ready.
+    pub(super) fn confirm_quit(state: &mut AppState) {
+        let mut operations = AppStateConfirmedQuitOperations { state };
+        dispatch_shell_controller_confirmed_quit(&mut operations);
     }
 
     /// Bind the shared controller to the active menu page for one pointer
@@ -1531,6 +1557,8 @@ Details: {details}"
         use crate::app::frontend::shell_transition::ShellExitThen;
         match then {
             ShellExitThen::MainMenu(action) => Self::handle_main_menu_shell_action(state, action),
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            ShellExitThen::UpdateOffer => crate::app::updater::open_offer(state),
             ShellExitThen::SinglePlayer(action) => {
                 Self::handle_single_player_shell_action(state, action)
             }
@@ -1882,7 +1910,9 @@ Details: {details}"
         state.frontend.shell_message_box = None;
         if matches!(
             state.frontend.shell_controller.top_id(),
-            Some(crate::ui::shell::descriptor::DialogId(0x00CE | 0x0120))
+            Some(crate::ui::shell::descriptor::DialogId(
+                0x00CE | 0x0120 | 0x0121
+            ))
         ) {
             state.frontend.shell_controller.pop();
         }

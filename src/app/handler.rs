@@ -1703,6 +1703,11 @@ impl ApplicationHandler for App {
                 Self::poll_choose_map_scroll(state),
                 Self::poll_campaign(state),
                 Self::campaign_score_animation_deadline(state),
+                // Captures replay sealed input; they never check or ask.
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                (self.shell_capture.is_none() && self.tactical_capture.is_none())
+                    .then(|| crate::app::updater::poll(state))
+                    .flatten(),
             ]
             .into_iter()
             .flatten()

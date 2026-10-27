@@ -99,6 +99,8 @@ pub(crate) mod telemetry_capture;
 #[cfg(feature = "telemetry-dashboard")]
 pub(crate) mod telemetry_server;
 pub(crate) mod types;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) mod updater;
 mod window_icon;
 
 /// Main window title. The single-instance gate finds a running copy's window by

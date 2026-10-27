@@ -562,6 +562,86 @@ jobs:
             dist/*.AppImage
           if-no-files-found: error
 
+  # Each platform's installed game updates itself to this dev build through
+  # its own updater (src/app/updater, tools/update_test.py): the real publisher
+  # signs the R2 layout downloads.yml would publish, a local server stands in for
+  # downloads.vera20k.org, and the installed game is this commit's program built
+  # older (0.0.1), trusting a throwaway key and that server. Also refused: a
+  # manifest and an installer changed after signing. Without retail game data
+  # there is no main menu to ask on, so that build updates without asking. It
+  # uploads nothing: `publish` takes every artifact as an installer.
+  update-test:
+    name: update test (${{ matrix.target }})
+    needs: [prepare, build]
+    if: inputs.promote == ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+            program: vera20k.exe
+          - os: ubuntu-22.04
+            target: linux-x64
+            program: vera20k
+          - os: macos-latest
+            target: macos-arm64
+            program: vera20k
+    steps:
+      - name: Check out with LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      # The game's ALSA headers, the AppImage step's desktop-file-validate, and
+      # a virtual screen with a software Vulkan device to run the game on.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils xvfb mesa-vulkan-drivers
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.target }}
+          path: release
+      - name: Build the older test program
+        shell: bash
+        env:
+          VERA20K_COMMIT: ${{ needs.prepare.outputs.sha }}
+          VERA20K_UPDATE_URL: http://127.0.0.1:47311/
+          VERA20K_UPDATE_UNATTENDED: '1'
+        run: |
+          set -euo pipefail
+          key="$(python -m tools.update_test key "$RUNNER_TEMP/update-key")"
+          python - <<'PY'
+          import pathlib, re
+          path = pathlib.Path("Cargo.toml")
+          path.write_text(re.sub(r'(?m)^version = ".*"$', 'version = "0.0.1"', path.read_text(), count=1), newline="\n")
+          PY
+          VERA20K_UPDATE_KEY="$key" cargo build --profile fast -p vera20k --no-default-features --bin vera20k
+      - name: Update the installed older build to this dev build
+        shell: bash
+        timeout-minutes: 20
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          release=(release/*)
+          test "${#release[@]}" -eq 1
+          test=(python -m tools.update_test run --key "$RUNNER_TEMP/update-key/signing-key.pem"
+            --release "${release[0]}" --version "$VERSION" --program "target/fast/${{ matrix.program }}")
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s '-screen 0 1280x1024x24' "${test[@]}"
+          else
+            "${test[@]}"
+          fi
+
   # The library tests on each platform a dev build ships, from the commit it
   # builds. No CI runs by itself, so this is where a change first has to pass on
   # Windows and Linux before it reaches testers. They run beside the builds,
@@ -584,7 +664,7 @@ jobs:
 
   publish:
     name: publish
-    needs: [prepare, build, test]
+    needs: [prepare, build, test, update-test]
     # "none" stops here, with the installers left as workflow artifacts.
     if: needs.prepare.outputs.publish != 'none'
     #

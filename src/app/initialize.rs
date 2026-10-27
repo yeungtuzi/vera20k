@@ -1099,6 +1099,8 @@ impl App {
             process_assets,
             audio: startup_audio_runtime,
             persistence: crate::app::persistence::PersistenceState::new(options_profile),
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            updater: Default::default(),
             diag: crate::app::diagnostics::state::DiagnosticsState::new(
                 match crate::sim::parity_digest::ParityDigestSink::from_env() {
                     Ok(sink) => {

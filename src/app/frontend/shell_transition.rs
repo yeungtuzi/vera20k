@@ -226,6 +226,10 @@ fn panel_rows(state: &AppState) -> u32 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShellExitThen {
     MainMenu(crate::ui::main_menu_shell::MainMenuShellAction),
+    /// The updater's offer: `0xE2` slides out as for Exit Game, then the
+    /// message box asks over the empty shell backdrop.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    UpdateOffer,
     SinglePlayer(crate::ui::single_player_shell::SinglePlayerShellAction),
     MoviesCredits(crate::ui::movies_credits_shell::MoviesCreditsAction),
     /// Movie list Play Movie with a selected row.
@@ -338,6 +342,8 @@ impl ShellExitThen {
     pub(crate) fn dialog(&self) -> ShellSlideKind {
         match self {
             Self::MainMenu(_) => ShellSlideKind::MainMenu,
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+            Self::UpdateOffer => ShellSlideKind::MainMenu,
             Self::SinglePlayer(_) => ShellSlideKind::SinglePlayer,
             Self::MoviesCredits(_) => ShellSlideKind::MoviesAndCredits,
             Self::PlayMovie | Self::MovieListBack => ShellSlideKind::MovieList,

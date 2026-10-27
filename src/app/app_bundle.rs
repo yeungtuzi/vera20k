@@ -53,6 +53,23 @@ fn data_folder() -> Option<PathBuf> {
     }
 }
 
+/// The app bundle (macOS) or AppImage file (Linux) this process runs from:
+/// what the updater replaces with a newer release.
+pub(crate) fn package_path() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    if cfg!(target_os = "macos") {
+        in_app_bundle(&executable)
+            .then(|| executable.ancestors().nth(3).map(Path::to_path_buf))
+            .flatten()
+    } else if cfg!(target_os = "linux") {
+        let app_dir = PathBuf::from(std::env::var_os("APPDIR")?);
+        let image = PathBuf::from(std::env::var_os("APPIMAGE")?);
+        (in_app_image(&executable, &app_dir) && image.is_absolute()).then_some(image)
+    } else {
+        None
+    }
+}
+
 /// Whether `executable` is inside `<name>.app/Contents/MacOS/<executable>`.
 fn in_app_bundle(executable: &Path) -> bool {
     let mut folders = executable.ancestors().skip(1);

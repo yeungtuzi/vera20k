@@ -30,11 +30,12 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - name: Mirror verified release installers to R2
+      - name: Mirror verified release installers and their signed manifest to R2
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: bash .github/release/publish-r2.sh "$RELEASE_TAG"

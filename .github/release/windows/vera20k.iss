@@ -15,6 +15,11 @@
 ; A silent install takes the game folder from /GAMEDIR=<folder>, or else uses
 ; the one it would offer.
 ;
+; The game's updater (src/app/updater) runs a newer setup with /SILENT
+; /UPDATE=<the game's process id> /DIR=<its install folder>: setup waits for
+; that process to exit, keeps config.toml exactly as it is, replaces the program
+; files and starts the game again.
+;
 #ifndef AppVersion
   #error Define AppVersion, Build, PackageDir, OutputDir and OutputBaseFilename
 #endif
@@ -184,6 +189,8 @@ Type: files; Name: "{autodesktop}\VERA20K.lnk"
 
 [Run]
 Filename: "{app}\vera20k.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,VERA}"; Flags: nowait postinstall skipifsilent
+; An update the game started returns the player to the game.
+Filename: "{app}\vera20k.exe"; WorkingDir: "{app}"; Flags: nowait skipifnotsilent; Check: IsGameUpdate
 
 [Code]
 type
@@ -204,6 +211,54 @@ var
   RecommendedInstall: Integer;
   InstallationsScanned, UpdatingSelection: Boolean;
   RequiredIssues, OptionalIssues: String;
+
+function OpenProcess(DesiredAccess: DWORD; InheritHandle: BOOL; ProcessId: DWORD): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(Handle: THandle; Milliseconds: DWORD): DWORD;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+{ The game's process id when its updater started this setup (/UPDATE=), else 0. }
+function UpdatingGame(): DWORD;
+begin
+  Result := StrToIntDef(ExpandConstant('{param:UPDATE|0}'), 0);
+end;
+
+{ An update of an installed game keeps its config.toml, and with it the game
+  folder and settings, exactly as they are. }
+function IsGameUpdate(): Boolean;
+begin
+  Result := False;
+  if UpdatingGame() <> 0 then
+    Result := FileExists(AddBackslash(WizardDirValue()) + 'config.toml');
+end;
+
+{ The game quits once it has started this setup: wait until it has exited, so
+  its files can be replaced. }
+function InitializeSetup(): Boolean;
+var
+  Game: THandle;
+begin
+  Result := True;
+  if UpdatingGame() = 0 then
+    Exit;
+  { SYNCHRONIZE; 0 means it has already exited. }
+  Game := OpenProcess($00100000, False, UpdatingGame());
+  if Game <> 0 then
+  begin
+    if WaitForSingleObject(Game, 60000) <> 0 then
+      Log('The game had not exited after a minute');
+    CloseHandle(Game);
+  end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if (PageID = GameDirPage.ID) or (PageID = GameCheckPage.ID) then
+    Result := IsGameUpdate();
+end;
 
 function NormalizeGameDir(Dir: String): String;
 begin
@@ -744,7 +799,10 @@ end;
 
 procedure RegisterPreviousData(PreviousDataKey: Integer);
 begin
-  SetPreviousData(PreviousDataKey, 'GameDir', GameDir());
+  if IsGameUpdate() then
+    SetPreviousData(PreviousDataKey, 'GameDir', GetPreviousData('GameDir', ''))
+  else
+    SetPreviousData(PreviousDataKey, 'GameDir', GameDir());
 end;
 
 procedure AppendReadySection(var Memo: String; Section, NewLine: String);
@@ -871,6 +929,6 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
+  if (CurStep = ssPostInstall) and not IsGameUpdate() then
     WriteConfig();
 end;

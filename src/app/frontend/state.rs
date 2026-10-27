@@ -247,4 +247,13 @@ pub(crate) enum ShellMessageBoxPurpose {
     CampaignReplay(Option<Box<crate::app::match_bootstrap::PreparedCampaignStartup>>),
     /// MapSelect's failed Init message returns to the victory continuation.
     CampaignVictory(Box<crate::app::campaign_victory::CampaignVictory>),
+    /// The updater's offer (`0x121`): Update, Skip Version or Later.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    UpdateOffer,
+    /// The updater's download progress (`0xCE`); its button cancels.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    UpdateProgress,
+    /// The updater's failure notice (`0xCE`).
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    UpdateFailed,
 }

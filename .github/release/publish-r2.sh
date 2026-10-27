@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Copy the three attested stable-release installers to immutable R2 keys.
-# Credentials come only from the environment; never enable shell tracing here.
+# Copy the three attested stable-release installers to immutable R2 keys, with
+# a manifest signed for the game's updater (src/app/updater).
+# Credentials and the signing key come only from the environment; never enable
+# shell tracing here.
 set +x
 set -euo pipefail
 umask 077
@@ -16,7 +18,13 @@ bucket=vera20k-downloads
 [[ ${R2_ACCOUNT_ID:-} =~ ^[0-9a-f]{32}$ ]] || die 'R2_ACCOUNT_ID is required'
 [[ -n ${AWS_ACCESS_KEY_ID:-} && -n ${AWS_SECRET_ACCESS_KEY:-} ]] \
   || die 'S3 access credentials are required'
-for command in gh aws jq; do command -v "$command" >/dev/null || die "$command is required"; done
+[[ -n ${UPDATE_SIGNING_KEY:-} ]] || die 'UPDATE_SIGNING_KEY is required'
+# The public half the game trusts, beside this script: base64 of the raw
+# 32-byte Ed25519 key.
+public_key=$(tr -d '[:space:]' < "$(dirname "$0")/update-key.pub") \
+  && [[ $public_key =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]] \
+  || die 'update-key.pub must hold one base64 Ed25519 public key'
+for command in gh aws jq openssl; do command -v "$command" >/dev/null || die "$command is required"; done
 export AWS_DEFAULT_REGION=auto AWS_EC2_METADATA_DISABLED=true AWS_PAGER=''
 export AWS_RETRY_MODE=standard AWS_MAX_ATTEMPTS=5
 export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
@@ -104,6 +112,21 @@ gh api "repos/$repo/releases/tags/$tag" > "$work/release-final.json"
 [[ "$(release_snapshot "$work/release.json")" == "$(release_snapshot "$work/release-final.json")" \
   && $commit == "$(tag_commit)" ]] || die 'GitHub release changed during verification'
 
+# Sign the exact manifest bytes that latest.json will hold, then check the
+# signature against update-key.pub, so a wrong secret stops here instead of
+# reaching players. Ed25519 signatures are deterministic: a retry re-creates
+# identical bytes. DER prefix: RFC 8410 SubjectPublicKeyInfo for Ed25519.
+printf '%s\n' "$UPDATE_SIGNING_KEY" > "$work/signing-key.pem"
+openssl pkeyutl -sign -inkey "$work/signing-key.pem" -rawin -in "$work/manifest.json" \
+  -out "$work/manifest.sig" 2>/dev/null || die 'UPDATE_SIGNING_KEY cannot sign'
+rm -f -- "$work/signing-key.pem"
+{ printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'; openssl base64 -d -A <<< "$public_key"; } \
+  > "$work/update-key.der"
+openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/update-key.der" -rawin \
+  -in "$work/manifest.json" -sigfile "$work/manifest.sig" >/dev/null 2>&1 \
+  || die 'UPDATE_SIGNING_KEY does not match update-key.pub'
+openssl base64 -A < "$work/manifest.sig" > "$work/manifest.json.sig"
+
 # Return 4 only for an absent object; auth, transport and service errors fail.
 # Metadata from the GET, not an earlier HEAD, supplies the latest pointer's ETag.
 fetch_optional() {
@@ -150,6 +173,7 @@ for index in 0 1 2; do
   publish_immutable "releases/$tag/${names[$index]}" "$work/assets/${names[$index]}" "${types[$index]}" "${names[$index]}"
 done
 publish_immutable "releases/$tag/manifest.json" "$work/manifest.json" application/json
+publish_immutable "releases/$tag/manifest.json.sig" "$work/manifest.json.sig" text/plain
 
 gh api "repos/$repo/releases/latest" > "$work/latest-release.json"
 if ! jq -e --arg tag "$tag" '.tag_name == $tag and .draft == false and .prerelease == false' \

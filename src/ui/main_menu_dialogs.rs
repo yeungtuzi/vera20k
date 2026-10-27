@@ -49,21 +49,23 @@ pub(crate) const CAMPAIGN_REPLAY_YES_KEY: &str = "TXT_YES";
 pub(crate) const CAMPAIGN_REPLAY_NO_KEY: &str = "TXT_NO";
 
 /// The resolved strings of a shell message box (ShellMessageBox__Run
-/// `0x005D3490`): body, OK-slot button (`0x5AE`, result0) and optional
-/// Cancel-slot caption (control2, result1). An empty Cancel selects CE
-/// instead of120. Read from CSF once at open, not every frame.
+/// `0x005D3490`): body, OK-slot button (`0x5AE`, result0), optional
+/// Cancel-slot caption (control2, result1) and optional third button
+/// (result2). An empty Cancel selects CE instead of 120, a populated third
+/// 121. Read from CSF once at open, not every frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShellMessageBoxLabels {
     pub title: String,
     pub confirm: String,
     pub cancel: String,
+    pub third: String,
 }
 
 impl ShellMessageBoxLabels {
-    /// gamemd ShellMessageBox__Run @0x005D3490 chooses CE/120 from
+    /// gamemd ShellMessageBox__Run @0x005D3490 chooses CE/120/121 from
     /// populated captions, including an empty CSF value in an optional slot.
     pub fn kind(&self) -> crate::ui::shell::modal::ModalKind {
-        crate::ui::shell::modal::message_box_kind(Some(&self.cancel), None)
+        crate::ui::shell::modal::message_box_kind(Some(&self.cancel), Some(&self.third))
     }
 
     /// FUN_005ADD10 @0x005ADDA6..5ADDCF: only TXT_OK is supplied.
@@ -72,6 +74,7 @@ impl ShellMessageBoxLabels {
             title: csf("MSG:UnableMapSelect", "Unable to initiate Map Selection!"),
             confirm: csf("TXT_OK", "OK"),
             cancel: String::new(),
+            third: String::new(),
         }
     }
 
@@ -81,6 +84,7 @@ impl ShellMessageBoxLabels {
             title: csf(EXIT_CONFIRM_TITLE_KEY, EXIT_CONFIRM_TITLE_FALLBACK),
             confirm: csf(EXIT_CONFIRM_OK_KEY, EXIT_CONFIRM_OK_FALLBACK),
             cancel: csf(EXIT_CONFIRM_CANCEL_KEY, EXIT_CONFIRM_CANCEL_FALLBACK),
+            third: String::new(),
         }
     }
 
@@ -93,6 +97,7 @@ impl ShellMessageBoxLabels {
             ),
             confirm: csf(CAMPAIGN_REPLAY_YES_KEY, "Yes"),
             cancel: csf(CAMPAIGN_REPLAY_NO_KEY, "No"),
+            third: String::new(),
         }
     }
 }

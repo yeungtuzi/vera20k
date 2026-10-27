@@ -123,6 +123,9 @@ rodio = { version = "0.22", default-features = false, features = ["playback"] }
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 ureq = { version = "3.5", default-features = false, features = ["rustls", "json"] }
+# Ed25519 for the updater's signed release manifest (src/app/updater). Already
+# compiled for ureq's rustls, so it adds no crate.
+ring = "0.17"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }

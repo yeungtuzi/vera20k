@@ -7,9 +7,16 @@ Cloudflare R2. It never rebuilds or uploads game data.
 The publisher verifies the release tag, GitHub size/SHA-256 and the build
 attestation. It uploads immutable `releases/v<version>/<filename>` objects,
 reads them back and checks their bytes, then stores `manifest.json` for that
-version. Finally it conditionally replaces `latest.json`, only if this is
-GitHub's latest stable release and the pointer would not move backward.
-The website's three `/download/<platform>` routes read that pointer.
+version and `manifest.json.sig`, its Ed25519 signature. Finally it
+conditionally replaces `latest.json`, only if this is GitHub's latest stable
+release and the pointer would not move backward. `latest.json` holds the same
+bytes as the version's `manifest.json`, so the website's three
+`/download/<platform>` routes read it unchanged.
+
+The game's updater (`src/app/updater`) reads `latest.json`, and installs a
+newer version only when `releases/v<version>/manifest.json.sig` verifies those
+exact bytes with the key in `update-key.pub` and the download matches the
+manifest's size and SHA-256.
 
 ## Setup and retry
 
@@ -19,11 +26,25 @@ restricted to the `vera20k-downloads` bucket; bucket administration is unnecessa
 The public custom domain is `downloads.vera20k.org`; r2.dev stays disabled.
 Credentials must not appear in code, command arguments or logs.
 
-The Ubuntu 24.04 runner supplies `gh`, AWS CLI and `jq`. To retry, dispatch
-`downloads.yml` with the published stable tag, for example `v0.2.2`.
+The secret `UPDATE_SIGNING_KEY` holds the PEM Ed25519 private key whose public
+half is `update-key.pub` (base64 of the raw 32 bytes). The publisher refuses to
+upload anything when the two do not match. Keep a private backup of the key:
+installed games accept only updates it signed, so after losing or replacing it
+they stop seeing updates until their players install, by hand, a release that
+carries the new `update-key.pub`. To make a key:
+
+```sh
+openssl genpkey -algorithm ed25519 -out update-signing-key.pem
+openssl pkey -in update-signing-key.pem -pubout -outform DER | tail -c 32 | openssl base64 -A
+gh secret set UPDATE_SIGNING_KEY --repo YuriPlanet/vera20k < update-signing-key.pem
+```
+
+The Ubuntu 24.04 runner supplies `gh`, AWS CLI, `jq` and OpenSSL 3. To retry,
+dispatch `downloads.yml` with the published stable tag, for example `v0.2.2`.
 A local run uses `bash .github/release/publish-r2.sh v0.2.2` with `R2_ACCOUNT_ID`,
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and GitHub authentication already
-in the environment. Never enable shell tracing.
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `UPDATE_SIGNING_KEY`, OpenSSL 3 or
+later, and GitHub authentication already in the environment. Never enable shell
+tracing.
 
 The initial v0.2.2 build predates this workflow, so dispatch its first mirror
 manually on `main`. Later releases whose tagged commit includes the workflow

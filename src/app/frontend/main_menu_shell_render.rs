@@ -846,7 +846,7 @@ const EXIT_CONFIRM_MODAL_DEPTHS: shell_paint::ModalDepths = shell_paint::ModalDe
     text: 0.00040,
 };
 
-/// Build the shell message box (0xCE/0x120) SHP modal overlay when it is open: the centered
+/// Build the shell message box (0xCE/0x120/0x121) SHP modal overlay when it is open: the centered
 /// PUDLGBGN panel + populated MNBTTN buttons and labels, sourced from
 /// the skirmish chrome atlas (the only atlas that loads PUDLGBGN/MNBTTN). The
 /// pressed button is read from the shared shell controller (its top dialog is the
@@ -858,7 +858,6 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
     let layout = shell_layout::shell_message_box_layout(state, modal_state.kind());
     let pressed = state.frontend.shell_controller.pressed();
     let ok_pressed = pressed == Some(modal::control::OK);
-    let cancel_pressed = pressed == Some(modal::control::CANCEL);
     let frames = crate::app::frontend::skirmish_shell_render::type3_button_frames(atlas);
     let mut buttons = vec![shell_paint::ModalButton {
         rect: layout.ok,
@@ -885,17 +884,22 @@ fn build_shell_message_box_overlay(state: &AppState) -> Option<shell_paint::Moda
             path_a_reveal: None,
         },
     ];
-    if let Some(rect) = layout.cancel {
+    for (rect, text, control) in [
+        (layout.third, &modal_state.third, modal::control::THIRD),
+        (layout.cancel, &modal_state.cancel, modal::control::CANCEL),
+    ] {
+        let Some(rect) = rect else { continue };
+        let pressed = pressed == Some(control);
         buttons.push(shell_paint::ModalButton {
             rect,
-            pressed: cancel_pressed,
+            pressed,
             enabled: true,
         });
         labels.push(PaintLabel {
-            text: (&modal_state.cancel).into(),
-            rect: layout.scale.derive_rect(rect, |rect| {
-                owner_draw_button_label_rect(rect, cancel_pressed)
-            }),
+            text: text.into(),
+            rect: layout
+                .scale
+                .derive_rect(rect, |rect| owner_draw_button_label_rect(rect, pressed)),
             align: ShellAlign::H_CENTER | ShellAlign::V_CENTER,
             rgb: SHELL_TEXT_RGB_ENABLED,
             path_a_reveal: None,

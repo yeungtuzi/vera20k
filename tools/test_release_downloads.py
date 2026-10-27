@@ -1,94 +1,13 @@
 """Exercise the real Bash publisher against local GitHub/S3 CLI fixtures."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
 
-
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / ".github/release/publish-r2.sh"
-
-MOCK = r'''#!/usr/bin/env python3
-import hashlib, json, os, pathlib, shutil, sys
-root = pathlib.Path(os.environ["PUBLISH_FIXTURE"])
-config = json.loads((root / "config.json").read_text())
-args = sys.argv[1:]
-tool = pathlib.Path(sys.argv[0]).name
-with (root / "calls.jsonl").open("a") as output:
-    output.write(json.dumps([tool, args]) + "\n")
-def flag(name):
-    return args[args.index(name) + 1]
-def fail(code):
-    print("An error occurred (" + code + ") when calling the fixture operation", file=sys.stderr)
-    sys.exit(1)
-if tool == "gh":
-    if args[0] == "api":
-        endpoint = args[1]
-        if "/git/ref/tags/" in endpoint:
-            print(json.dumps({"object": {"type": "commit", "sha": config["commit"]}}))
-        elif endpoint.endswith("/releases/latest"):
-            latest = config.get("latest_tag", config["tag"])
-            if "--jq" in args:
-                print(latest)
-            else:
-                print(json.dumps({"tag_name": latest, "draft": False, "prerelease": False}))
-        elif "/releases/tags/" in endpoint:
-            print(json.dumps(config["release"]))
-        else:
-            fail("UnexpectedGhEndpoint")
-    elif args[:2] == ["release", "download"]:
-        name = flag("--pattern")
-        dest = pathlib.Path(flag("--dir")) / name
-        shutil.copyfile(root / "assets" / name, dest)
-        if config.get("tamper_name") == name:
-            dest.write_bytes(b"changed download")
-    elif args[:2] == ["attestation", "verify"]:
-        if config.get("attestation_fail"):
-            fail("InvalidProvenance")
-        assert flag("--source-digest") == config["commit"]
-        assert flag("--signer-workflow") == "YuriPlanet/vera20k/.github/workflows/release.yml"
-        assert "--deny-self-hosted-runners" in args
-    else:
-        fail("UnexpectedGhCommand")
-elif tool == "aws":
-    operation = args[args.index("s3api") + 1]
-    key = flag("--key")
-    path = root / "objects" / key
-    if operation == "head-object":
-        if not path.exists():
-            fail("404")
-        print(json.dumps({"ContentLength": path.stat().st_size}))
-    elif operation == "get-object":
-        if not path.exists():
-            fail("NoSuchKey")
-        shutil.copyfile(path, args[-1])
-        etag = '"' + hashlib.md5(path.read_bytes()).hexdigest() + '"'
-        print(json.dumps({"ETag": etag, "ContentLength": path.stat().st_size}))
-    elif operation == "put-object":
-        if config.get("fail_put") == key:
-            fail("InternalError")
-        if "--if-none-match" in args and path.exists():
-            fail("PreconditionFailed")
-        if "--if-match" in args:
-            if not path.exists() or flag("--if-match") != '"' + hashlib.md5(path.read_bytes()).hexdigest() + '"':
-                fail("PreconditionFailed")
-        if key == "latest.json" and config.get("competing_latest"):
-            path.write_text(json.dumps(config["competing_latest"]))
-            fail("PreconditionFailed")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(flag("--body"), path)
-        if config.get("corrupt_put") == key:
-            path.write_bytes(b"storage corruption")
-        print("{}")
-    else:
-        fail("UnexpectedS3Command")
-else:
-    fail("UnexpectedTool")
-'''
+from tools.release_fixture import Publisher, signing_key, verify_signature
 
 
 class ReleaseDownloadsTests(unittest.TestCase):
@@ -98,13 +17,12 @@ class ReleaseDownloadsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="release-downloads-fixture-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        (self.root / "bin").mkdir()
-        (self.root / "assets").mkdir()
-        (self.root / "objects").mkdir()
-        for name in ("gh", "aws"):
-            path = self.root / "bin" / name
-            path.write_text(MOCK)
-            path.chmod(0o755)
+        # The real script, beside a public key for this fixture's signing key.
+        try:
+            self.signing_key, self.public_key = signing_key(self.root)
+        except (OSError, RuntimeError, subprocess.CalledProcessError):
+            self.skipTest("publisher requires OpenSSL with Ed25519")
+        self.publisher = Publisher(self.root, self.public_key)
         self.names = ["vera20k-0.2.2-windows-x64-setup.exe", "vera20k-0.2.2-macos-arm64.dmg", "vera20k-0.2.2-linux-x64.AppImage"]
         assets = []
         for index, name in enumerate(self.names):
@@ -114,13 +32,8 @@ class ReleaseDownloadsTests(unittest.TestCase):
         self.config = {"tag": "v0.2.2", "commit": "a" * 40,
                        "release": {"id": 10, "tag_name": "v0.2.2", "draft": False, "prerelease": False, "assets": assets}}
 
-    def run_publisher(self, tag="v0.2.2"):
-        (self.root / "config.json").write_text(json.dumps(self.config))
-        env = dict(os.environ, PATH=str(self.root / "bin") + os.pathsep + os.environ["PATH"],
-                   PUBLISH_FIXTURE=str(self.root), R2_ACCOUNT_ID="b" * 32,
-                   AWS_ACCESS_KEY_ID="fixture-key", AWS_SECRET_ACCESS_KEY="fixture-secret",
-                   R2_PUBLISH_LOCK_DIR=str(self.root / "publish.lock"), GH_TOKEN="fixture-token")
-        return subprocess.run(["bash", str(SCRIPT), tag], env=env, capture_output=True, text=True, timeout=30)
+    def run_publisher(self, tag="v0.2.2", signing_key=None):
+        return self.publisher.run(tag, self.config, self.signing_key if signing_key is None else signing_key)
 
     def calls(self):
         path = self.root / "calls.jsonl"
@@ -138,9 +51,12 @@ class ReleaseDownloadsTests(unittest.TestCase):
     def test_publication_and_identical_retry_verify_all_bytes(self):
         result = self.run_publisher()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.puts()), 5)
+        self.assertEqual(len(self.puts()), 6)
         manifest = self.root / "objects/releases/v0.2.2/manifest.json"
         self.assertEqual(manifest.read_bytes(), (self.root / "objects/latest.json").read_bytes())
+        signature = (self.root / "objects/releases/v0.2.2/manifest.json.sig").read_text()
+        self.assertTrue(verify_signature(self.public_key, manifest.read_bytes(), signature, self.root))
+        self.assertFalse(verify_signature(self.public_key, manifest.read_bytes() + b" ", signature, self.root))
         data = json.loads(manifest.read_text())
         self.assertEqual(set(data["files"]), {"windows", "macos", "linux"})
         for entry in data["files"].values():
@@ -154,14 +70,26 @@ class ReleaseDownloadsTests(unittest.TestCase):
             key = args[args.index("--key") + 1]
             if key == "latest.json":
                 self.assertEqual(args[args.index("--cache-control") + 1], "no-cache")
-            elif key.endswith("/manifest.json"):
+            elif key.endswith(("/manifest.json", "/manifest.json.sig")):
                 self.assertEqual(args[args.index("--content-disposition") + 1], "inline")
             else:
                 self.assertEqual(args[args.index("--content-disposition") + 1],
                                  'attachment; filename="' + key.rsplit("/", 1)[1] + '"')
         again = self.run_publisher()
         self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertEqual(len(self.puts()), 5, "an identical retry must not overwrite any object")
+        self.assertEqual(len(self.puts()), 6, "an identical retry must not overwrite any object")
+
+    def test_signing_key_must_match_the_trusted_public_key(self):
+        old_pointer = self.prior_pointer()
+        self.assertNotEqual(self.run_publisher(signing_key="").returncode, 0)
+        self.assertEqual(self.calls(), [], "a missing key stops before any remote call")
+        other = Path(self.root / "other")
+        other.mkdir()
+        result = self.run_publisher(signing_key=signing_key(other)[0])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match update-key.pub", result.stderr)
+        self.assertEqual(self.puts(), [])
+        self.assertEqual((self.root / "objects/latest.json").read_bytes(), old_pointer)
 
     def test_release_shape_and_provenance_fail_before_storage_writes(self):
         for failure in ("draft", "extra", "digest", "attestation"):
