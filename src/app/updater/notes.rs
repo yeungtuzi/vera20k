@@ -17,7 +17,7 @@ use crate::ui::shell::modal::{MessageBoxLayout, ModalKind};
 use crate::util::time::Instant;
 
 /// The caption above the list.
-pub(crate) const CAPTION: &str = "What's new:";
+const CAPTION: &str = "What's new:";
 /// Rows the list shows at once: from the lowest button's bottom up to below
 /// the question.
 const VISIBLE_ROWS: i32 = 8;
