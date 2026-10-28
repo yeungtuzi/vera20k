@@ -28,6 +28,10 @@ name = "asset"
 path = "src/bin/asset.rs"
 
 [[bin]]
+name = "map-tool"
+path = "src/bin/map-tool.rs"
+
+[[bin]]
 name = "extract-ini"
 path = "src/bin/extract-ini.rs"
 
