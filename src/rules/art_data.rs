@@ -1169,6 +1169,44 @@ fn unread_anim_type_config(name: &str) -> AnimTypeRuntimeConfig {
     config
 }
 
+fn validate_loaded_bound(
+    name: &str,
+    field: &'static str,
+    value: i32,
+    raw_count: i32,
+) -> Result<(), AnimAssetBindError> {
+    if value < -1 {
+        return Err(AnimAssetBindError::InvalidLoadedBound {
+            name: name.to_string(),
+            field,
+            value,
+            raw_count,
+        });
+    }
+    Ok(())
+}
+
+/// Clamp an oversized `End=` / `LoopEnd=` down to the frame count.
+///
+/// Retail art files in the wild routinely set a loop bound past the SHP's frames:
+/// the shipped Yuri's Revenge `[MAKEIRONFX]` family loops `0..6` over a
+/// single-frame invisible shape, and mods copy that idiom. A bound beyond the
+/// last frame only asks the animation to hold its final frame, so clamping is
+/// what the loop actually does; refusing to load the rules is a divergence that
+/// breaks otherwise valid mods. Negative bounds stay an error — those address no
+/// frame at all.
+fn clamp_loaded_bound(name: &str, field: &'static str, value: i32, raw_count: i32) -> i32 {
+    validate_loaded_bound(name, field, value, raw_count)
+        .expect("validated before clamping");
+    if value > raw_count {
+        log::warn!(
+            "animation type [{name}] {field}={value} exceeds {raw_count} frames; clamped"
+        );
+        return raw_count;
+    }
+    value
+}
+
 fn resolve_loaded_bounds(
     raw_count: i32,
     shadow: bool,
@@ -1189,7 +1227,9 @@ fn resolve_loaded_bounds(
     // atlas holds no key for it.
     let loaded_end = explicit_end.unwrap_or(header_end);
     let loaded_loop_end = explicit_loop_end.unwrap_or(header_end);
-    (loaded_end, loaded_loop_end)
+    let loaded_end = clamp_loaded_bound(name, "End", loaded_end, raw_count);
+    let loaded_loop_end = clamp_loaded_bound(name, "LoopEnd", loaded_loop_end, raw_count);
+    Ok((loaded_end, loaded_loop_end))
 }
 
 /// The End the loader takes from a SHP header of `raw_count` frames: the back

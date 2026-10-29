@@ -28,6 +28,10 @@ name = "asset"
 path = "src/bin/asset.rs"
 
 [[bin]]
+name = "map-tool"
+path = "src/bin/map-tool.rs"
+
+[[bin]]
 name = "extract-ini"
 path = "src/bin/extract-ini.rs"
 
@@ -90,7 +94,7 @@ dev-overlays = ["vera20k-core/dev-overlays"]
 telemetry-dashboard = ["vera20k-core/telemetry", "dep:sha1"]
 # Explicit offline trainer and per-unit event hooks. Never enabled by the
 # dashboard alone or the default/shipping feature set.
-debug-tools = ["telemetry-dashboard", "dev-overlays", "vera20k-core/debug-tools"]
+debug-tools = ["dev-overlays", "vera20k-core/debug-tools"]
 # Offline performance-recording build: writes a per-frame CSV of every SIM and
 # render phase plus path/process/GPU counters to ./perf/. A tool feature (never
 # shipped, PC-only): the recorder is on for the whole run, with no runtime
