@@ -668,6 +668,9 @@ fn launch(arguments: &[String]) -> Result<(), String> {
     let run_dir = data_dir.join("runs").join(&slug);
     std::fs::create_dir_all(&run_dir)
         .map_err(|error| format!("create {}: {error}", run_dir.display()))?;
+    // A campaign resolves its loose map beside `spawn.ini`, so the copy has to
+    // live in this launch's own directory (never the data directory root, where
+    // it would shadow an official chapter of the same name).
     let staged = run_dir.join(&staged_name);
     let same_file = map_path
         .canonicalize()
