@@ -13,10 +13,52 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+/// QoS classes: the scheduler prefers P-cores for interactive work and E-cores
+/// for background work, which is the only way macOS lets a process influence its
+/// own core type. Unfocused frames are background work.
+#[cfg(target_os = "macos")]
+const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+#[cfg(target_os = "macos")]
+const QOS_CLASS_BACKGROUND: u32 = 0x09;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+}
+
 thread_local! {
     /// Last presentation instant for this thread; the render callback runs on the
     /// event-loop thread only.
     static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    /// QoS class currently requested for this thread.
+    static QOS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Ask the scheduler for P-cores while focused and E-cores while unfocused.
+///
+/// Darwin has no core pinning; QoS is the supported hint and it steers placement.
+fn apply_qos(focused: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        if QOS.with(|cell| cell.get()) == Some(focused) {
+            return;
+        }
+        let class = if focused {
+            QOS_CLASS_USER_INTERACTIVE
+        } else {
+            QOS_CLASS_BACKGROUND
+        };
+        // SAFETY: pthread_set_qos_class_self_np takes a plain class value and a
+        // relative priority; both are in range for the caller's own thread.
+        let result = unsafe { pthread_set_qos_class_self_np(class, 0) };
+        if result == 0 {
+            QOS.with(|cell| cell.set(Some(focused)));
+        } else {
+            log::warn!("pthread_set_qos_class_self_np failed: {result}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = focused;
 }
 
 /// Frames per second granted to presentation; `None` means uncapped.
@@ -61,6 +103,7 @@ fn parse_cap(raw: Option<&str>, default: u32) -> Option<u32> {
 /// A late frame resets the slot instead of accumulating debt, so a slow render
 /// never busy-loops to catch up.
 pub(crate) fn pace_frame(focused: bool) {
+    apply_qos(focused);
     let Some(hz) = cap_hz(focused) else {
         return;
     };
