@@ -50,11 +50,18 @@ fn estimate_zone_threat(
     if level == 0 || level > 2 {
         return Ok(0);
     }
-    let index = |zone| {
-        graph
+    // A zone built without a scanline seed has no native threat index. Retail
+    // never asks for one (every zone it creates carries a seed), but mod maps can
+    // leave a zone unseeded, and refusing the estimate aborts the whole frame.
+    // Fall back to the seed the records start from instead of failing the tick.
+    let index = |zone| -> Result<i32, String> {
+        Ok(graph
             .record(zone)
             .and_then(ZoneRecord::native_threat_index)
-            .ok_or_else(|| format!("hierarchy level{level} zone{zone} lacks native threat seed"))
+            .unwrap_or_else(|| {
+                log::warn!("hierarchy level{level} zone{zone} lacks native threat seed; using 0");
+                0
+            }))
     };
     let target_index = index(target)?;
     if level == 1 {
