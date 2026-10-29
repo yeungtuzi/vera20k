@@ -608,6 +608,13 @@ impl App {
             &mut crate::app::diagnostics::tactical_capture::session::TacticalCaptureSession,
         >,
     ) -> Result<FrameRenderOutcome> {
+        // Hold the presentation to the configured frame rate. The window uses
+        // Fifo, so without this a 144 Hz panel renders 144 frames a second for a
+        // simulation that advances a few ticks a second. Captures keep their own
+        // cadence and skip the cap.
+        if shell_capture.is_none() && tactical_capture.is_none() {
+            crate::app::present_cap::pace_frame(state.platform.window.has_focus());
+        }
         anyhow::ensure!(
             shell_capture.is_none() || tactical_capture.is_none(),
             "shell and tactical capture cannot share a render"
