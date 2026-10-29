@@ -146,9 +146,20 @@ impl BridgeRecalcCatalog {
                 tile: i32::from(tile),
             })?
             .get(usize::from(variant))
-            .ok_or_else(|| BridgeRecalcCatalogError::Unavailable {
-                tile,
-                reason: format!("missing registered TMP file {variant}"),
+            .ok_or_else(|| {
+                // Diagnostic: a saved terrain references a variant this session
+                // never registered. Log both sides so the mismatch is visible.
+                let have = self.files.get(&tile).map_or(0, |variants| variants.len());
+                log::warn!(
+                    "recalc tile {tile}: saved variant {variant} but only {have} variant(s) registered \
+                     ({} registered TMP names, selector table initialized={})",
+                    self.registered_names.len(),
+                    self.selector.initialized_table().is_some()
+                );
+                BridgeRecalcCatalogError::Unavailable {
+                    tile,
+                    reason: format!("missing registered TMP file {variant}"),
+                }
             })?
             .as_deref()
             .map_err(Clone::clone)

@@ -739,6 +739,34 @@ impl ApplicationHandler for App {
                 .record_physical_button(*button, edge.is_pressed());
         }
 
+        // Debug trainer panel: a click on a row is consumed before any screen
+        // routing, so it never turns into a selection or an order.
+        #[cfg(feature = "debug-tools")]
+        if let WindowEvent::MouseInput {
+            state: edge,
+            button: MouseButton::Left,
+            ..
+        } = &event
+            && edge.is_pressed()
+            && state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
+        {
+            let point = (
+                state.match_state.input.cursor_x,
+                state.match_state.input.cursor_y,
+            );
+            let view_height = state
+                .tactical_zoom()
+                .map(|zoom| zoom.src_height as f32)
+                .unwrap_or(state.platform.window.inner_size().height as f32);
+            if let Some(row) = crate::app::debug_tools::trainer_row_at(point, view_height)
+                && crate::app::debug_tools::activate_trainer_row(state, row)
+            {
+                state.match_state.input.trainer_panel_pressed = true;
+                state.platform.window.request_redraw();
+                return;
+            }
+        }
+
         // Native does not expose menu/game input while its process-start splash
         // owns the display. Keep close/resize/redraw operational, but discard
         // player input until the post-present deadline has elapsed.

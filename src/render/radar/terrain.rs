@@ -122,6 +122,7 @@ impl NativeRadarTerrainSurface {
         }
         self.generated_rgb565 =
             generate_rgb565(&self.raw_rgb, raw_size, self.geometry.generated_size());
+        dump_generated_surface(&self.generated_rgb565, self.geometry.generated_size());
     }
 }
 
@@ -288,3 +289,46 @@ fn native_ftol(value: X87Value) -> i32 {
 #[cfg(test)]
 #[path = "terrain_tests.rs"]
 mod tests;
+
+/// Write the whole-map radar surface to a PNG once, when `RA2_DUMP_RADAR` names a
+/// path. Diagnostic only — no gamemd counterpart.
+///
+/// This is the buffer the in-game minimap draws from: it covers every playfield
+/// cell, is produced on the CPU and carries no shroud, which makes it the one
+/// honest source for an offline map preview. The env var is cleared after the
+/// first write so a session dumps exactly one map.
+fn dump_generated_surface(rgb565: &[u16], size: (i32, i32)) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DUMPED: AtomicBool = AtomicBool::new(false);
+
+    let Ok(path) = std::env::var("RA2_DUMP_RADAR") else {
+        return;
+    };
+    if path.is_empty() || DUMPED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let (width, height) = (size.0.max(1) as u32, size.1.max(1) as u32);
+    if rgb565.len() < (width as usize) * (height as usize) {
+        log::warn!("radar dump: surface shorter than {width}x{height}");
+        return;
+    }
+    let mut rgba = Vec::with_capacity(rgb565.len() * 4);
+    for value in rgb565.iter().take((width as usize) * (height as usize)) {
+        let r = ((value >> 11) & 0x1F) as u8;
+        let g = ((value >> 5) & 0x3F) as u8;
+        let b = (value & 0x1F) as u8;
+        rgba.extend_from_slice(&[
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+            255,
+        ]);
+    }
+    let Some(image) = image::RgbaImage::from_raw(width, height, rgba) else {
+        return;
+    };
+    match image.save(&path) {
+        Ok(()) => log::info!("radar dump written to {path}"),
+        Err(error) => log::warn!("radar dump failed for {path}: {error}"),
+    }
+}

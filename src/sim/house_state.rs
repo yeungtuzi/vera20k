@@ -2557,6 +2557,18 @@ impl HouseState {
         }
     }
 
+    /// Debug trainer "finish the mission now".
+    ///
+    /// A scripted campaign normally still holds `AllowWin` tags, which
+    /// `pending_outcome` treats as a veto when `GameMode` is zero, so winning
+    /// would be ignored until the mission cleared them. Clear them here and
+    /// accept the win with a zero-length savour timer, which expires on this
+    /// frame; no native flag is invented that the engine does not already read.
+    pub fn debug_force_win(&mut self, frame: i32) {
+        self.allow_win_tags = 0;
+        let _ = self.accept_win_result(frame, 0, false);
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn supply_result_flags_for_test(&mut self, won: bool, lost: bool, timer: CdTimer) {
         self.has_won = won;

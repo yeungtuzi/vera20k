@@ -249,8 +249,14 @@ impl App {
         };
         #[cfg(feature = "telemetry-dashboard")]
         crate::app::telemetry_capture::synchronize_observer(state);
-        #[cfg(feature = "debug-tools")]
+        // The trainer panel is client-side now; only a build that also carries
+        // the localhost dashboard drains its command inbox.
+        #[cfg(all(feature = "debug-tools", feature = "telemetry-dashboard"))]
         crate::app::debug_tools::service(state);
+        // The panel-only build still has to admit the offline match once per
+        // frame, which the dashboard's `service` used to do.
+        #[cfg(feature = "debug-tools")]
+        crate::app::debug_tools::sync_session(state);
         // HouseClass keeps simulating for SavourDelay, then blocks on the
         // current outcome Vox before it raises the victory/defeat exit global.
         // Drive that gate before deciding whether another sim frame is legal.
@@ -1153,6 +1159,41 @@ impl App {
             &mut encoder,
             &output.texture,
         );
+        // The debug trainer panel lives in the same final-window overlay pass,
+        // above gameplay and below the playback status line.
+        #[cfg(feature = "debug-tools")]
+        if state.frontend.screen == GameScreen::InGame {
+            let states = crate::app::debug_tools::trainer_row_states(state);
+            let rows: Vec<String> = states
+                .iter()
+                .map(|(row, _)| row.label().to_owned())
+                .collect();
+            let lit: Vec<bool> = states.iter().map(|(_, lit)| *lit).collect();
+            // Anchor the panel to the 4:3 playfield, not the window: with
+            // OriginalShape bars the window corner is outside the pointer's
+            // reachable area.
+            let (origin, scale, view_height) = state
+                .tactical_zoom()
+                .map(|zoom| {
+                    (
+                        [zoom.origin.0 as f32, zoom.origin.1 as f32],
+                        zoom.scale(),
+                        zoom.src_height as f32,
+                    )
+                })
+                .unwrap_or(([0.0, 0.0], 1.0, state.platform.window.inner_size().height as f32));
+            state.renderer.fps_overlay.encode_trainer(
+                &state.renderer.gpu,
+                &state.renderer.batch_renderer,
+                &mut encoder,
+                &output.texture,
+                &rows,
+                &lit,
+                origin,
+                scale,
+                view_height,
+            );
+        }
         if state.frontend.screen == GameScreen::InGame {
             let status = state
                 .match_state

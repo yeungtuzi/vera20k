@@ -153,6 +153,13 @@ pub(crate) struct RetailOptionsProfile {
     /// `None`, for an undisturbed test match. Off by default, so retail's
     /// "at least two players" gate stays.
     pub(crate) solo_skirmish: bool,
+    /// `[VERA] CampaignSpeedControl=`: the saved form of the retail
+    /// `-SPEEDCONTROL` switch, so the campaign's in-game Game Speed row stays
+    /// available without passing the switch at every launch. Off by default,
+    /// because gamemd hides that row in campaigns unless the process flag
+    /// `0xA8EDDC` was set (`Parse_Command_Line52F939..52F94B`). The launch
+    /// switch still forces it on for one run.
+    pub(crate) campaign_speed_control: bool,
     /// `[VERA] TranslateChat=`: the language received online chat is
     /// translated into, or `None`, the default, for off. Only the `/translate`
     /// chat command changes it ([`Self::commit_chat_translation`]).
@@ -226,6 +233,7 @@ impl Default for RetailOptionsProfile {
             shift_queue_count: DEFAULT_SHIFT_QUEUE_COUNT,
             wol_test_service: false,
             solo_skirmish: false,
+            campaign_speed_control: false,
             translate_chat: None,
             display: crate::ui::main_menu_dialogs::options::DisplayTarget::Auto,
         }
@@ -244,7 +252,7 @@ pub(crate) struct FormattedProfileSections {
     pub(crate) audio: [(&'static str, String); 7],
     pub(crate) network: [(&'static str, String); 4],
     /// VERA's own section, written after the native ones.
-    pub(crate) vera: [(&'static str, String); 12],
+    pub(crate) vera: [(&'static str, String); 13],
 }
 
 impl RetailOptionsLoad {
@@ -452,6 +460,8 @@ impl RetailOptionsProfile {
             );
             self.wol_test_service = vera.read_bool("WolTestService", self.wol_test_service);
             self.solo_skirmish = vera.read_bool("SoloSkirmish", self.solo_skirmish);
+            self.campaign_speed_control =
+                vera.read_bool("CampaignSpeedControl", self.campaign_speed_control);
             if let Some(value) = vera.read_name("TranslateChat", 16) {
                 self.translate_chat = crate::ui::chat_translation::ChatLanguage::from_tag(value);
             }
@@ -551,6 +561,10 @@ impl RetailOptionsProfile {
                     format_bool(self.wol_test_service).to_string(),
                 ),
                 ("SoloSkirmish", format_bool(self.solo_skirmish).to_string()),
+                (
+                    "CampaignSpeedControl",
+                    format_bool(self.campaign_speed_control).to_string(),
+                ),
                 (
                     "RenderInterpolation",
                     format_bool(self.render_interpolation).to_string(),
@@ -1510,6 +1524,36 @@ ScoreVolume=0.3\nIsScoreShuffle=yes\nSoundLatency=4\nInGameMusic=no\n[VERA]\nZoo
         assert!(!reloaded.mouse_wheel_zoom);
         assert!(!reloaded.render_interpolation);
         assert!(String::from_utf8_lossy(&written).contains("Unowned=keep"));
+    }
+
+    #[test]
+    fn campaign_speed_control_preference_round_trips_through_the_vera_section() {
+        let startup = RetailStartupOptions::default();
+        // Off unless saved: gamemd hides the campaign's Game Speed row without
+        // the `-SPEEDCONTROL` process flag, so the preference must not appear
+        // on by default.
+        assert!(
+            !load_snapshot(&startup, b"")
+                .retained_profile
+                .campaign_speed_control
+        );
+        let input = b"[VERA]\nCampaignSpeedControl=yes\nUnowned=keep\n";
+        let mut profile = load_snapshot(&startup, input).retained_profile;
+        assert!(profile.campaign_speed_control);
+        let written = profile.transform_settings(input);
+        assert!(
+            load_snapshot(&startup, &written)
+                .retained_profile
+                .campaign_speed_control
+        );
+        assert!(String::from_utf8_lossy(&written).contains("Unowned=keep"));
+        // Turning it back off writes the key rather than dropping it, so the
+        // saved value keeps overriding a hand-edited `yes` on the next launch.
+        profile.campaign_speed_control = false;
+        let written = profile.transform_settings(&written);
+        assert!(!load_snapshot(&startup, &written)
+            .retained_profile
+            .campaign_speed_control);
     }
 
     #[test]

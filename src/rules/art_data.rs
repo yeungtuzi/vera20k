@@ -989,7 +989,7 @@ fn validate_loaded_bound(
     value: i32,
     raw_count: i32,
 ) -> Result<(), AnimAssetBindError> {
-    if value < -1 || value > raw_count {
+    if value < -1 {
         return Err(AnimAssetBindError::InvalidLoadedBound {
             name: name.to_string(),
             field,
@@ -998,6 +998,27 @@ fn validate_loaded_bound(
         });
     }
     Ok(())
+}
+
+/// Clamp an oversized `End=` / `LoopEnd=` down to the frame count.
+///
+/// Retail art files in the wild routinely set a loop bound past the SHP's frames:
+/// the shipped Yuri's Revenge `[MAKEIRONFX]` family loops `0..6` over a
+/// single-frame invisible shape, and mods copy that idiom. A bound beyond the
+/// last frame only asks the animation to hold its final frame, so clamping is
+/// what the loop actually does; refusing to load the rules is a divergence that
+/// breaks otherwise valid mods. Negative bounds stay an error — those address no
+/// frame at all.
+fn clamp_loaded_bound(name: &str, field: &'static str, value: i32, raw_count: i32) -> i32 {
+    validate_loaded_bound(name, field, value, raw_count)
+        .expect("validated before clamping");
+    if value > raw_count {
+        log::warn!(
+            "animation type [{name}] {field}={value} exceeds {raw_count} frames; clamped"
+        );
+        return raw_count;
+    }
+    value
 }
 
 fn resolve_loaded_bounds(
@@ -1018,8 +1039,8 @@ fn resolve_loaded_bounds(
     // explicit INI End and LoopEnd keys.
     let loaded_end = explicit_end.unwrap_or(header_end);
     let loaded_loop_end = explicit_loop_end.unwrap_or(header_end);
-    validate_loaded_bound(name, "End", loaded_end, raw_count)?;
-    validate_loaded_bound(name, "LoopEnd", loaded_loop_end, raw_count)?;
+    let loaded_end = clamp_loaded_bound(name, "End", loaded_end, raw_count);
+    let loaded_loop_end = clamp_loaded_bound(name, "LoopEnd", loaded_loop_end, raw_count);
     Ok((loaded_end, loaded_loop_end))
 }
 

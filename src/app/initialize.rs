@@ -982,6 +982,7 @@ impl App {
                 local_owner_override: None,
                 sandbox_full_visibility: false,
                 debug_pause: false,
+                trainer_mcv_armed: false,
                 // KD-3: unify the two game-speed sources. `in_game_options.game_speed`
                 // (in the presentation owner) is the single source of truth; seed it
                 // from the skirmish-setup speed (internal 1) and derive
@@ -993,7 +994,12 @@ impl App {
             },
             frontend: crate::app::frontend::state::FrontendState {
                 shell_dialog_background: None,
-                campaign_speed_control: startup_options.campaign_speed_control,
+                // Retail gates the campaign's Game Speed row on the
+                // `-SPEEDCONTROL` process flag (`0xA8EDDC`); VERA also accepts
+                // the saved `[VERA] CampaignSpeedControl` preference, so the
+                // switch and the setting are two ways to ask for the same thing.
+                campaign_speed_control: startup_options.campaign_speed_control
+                    || options_profile.campaign_speed_control,
                 external_launch: false,
                 external_launch_error: None,
                 screen: GameScreen::default(),
@@ -1604,3 +1610,4 @@ fn attach_dashboard(state: &mut crate::app::AppState) {
         None => None,
     };
 }
+

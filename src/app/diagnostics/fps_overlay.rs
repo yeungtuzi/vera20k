@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 use crate::util::time::Instant;
 
-use crate::render::batch::{BatchRenderer, CameraUniform, InstanceBufferPool};
+use crate::render::batch::{BatchRenderer, BatchTexture, CameraUniform, InstanceBufferPool};
 use crate::render::bit_font::BitFont;
 use crate::render::gpu::GpuContext;
 
@@ -15,6 +15,9 @@ use super::state::FrameTimer;
 pub(crate) struct FpsOverlay {
     visible: bool,
     font: BitFont,
+    /// 2x2 white, used as the trainer panel's translucent backdrop: the font
+    /// atlas only carries glyph shapes.
+    panel_texture: crate::render::batch::BatchTexture,
     camera_buffer: wgpu::Buffer,
     camera_group: wgpu::BindGroup,
     frame: Mutex<OverlayFrame>,
@@ -35,6 +38,14 @@ impl FpsOverlay {
         Self {
             visible: false,
             font: BitFont::fallback_5x7(&gpu.device, &gpu.queue, batch),
+            panel_texture: batch.create_texture_on_device(
+                &gpu.device,
+                &gpu.queue,
+                &[255u8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
+                2,
+                2,
+                None,
+            ),
             camera_buffer,
             camera_group,
             frame: Mutex::new(OverlayFrame {
@@ -191,9 +202,31 @@ impl FpsOverlay {
             );
             frame.logged_first_frame = true;
         }
+        self.draw_instances(
+            batch,
+            encoder,
+            destination,
+            frame,
+            self.font.atlas(),
+            key,
+            "Window FPS",
+        );
+    }
+
+    /// Draw one uploaded instance batch into the final window surface.
+    fn draw_instances(
+        &self,
+        batch: &BatchRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        destination: &wgpu::Texture,
+        frame: &mut OverlayFrame,
+        texture: &BatchTexture,
+        key: &'static str,
+        label: &'static str,
+    ) {
         let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Window FPS"),
+            label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -218,13 +251,131 @@ impl FpsOverlay {
         if let Some((buffer, count)) = frame.pool.get(key) {
             batch.draw_passthrough_range_bound(
                 &mut pass,
-                self.font.atlas(),
+                texture,
                 buffer,
                 &self.camera_group,
                 0,
                 count,
             );
         }
+    }
+
+    /// The in-game debug trainer panel: one line per row, lit when the row reads
+    /// as enabled. It shares this overlay's font, camera and instance pool with
+    /// the FPS readout but keeps its own upload key, and it draws whether or not
+    /// the FPS readout is visible.
+    #[cfg(feature = "debug-tools")]
+    pub(crate) fn encode_trainer(
+        &self,
+        gpu: &GpuContext,
+        batch: &BatchRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        destination: &wgpu::Texture,
+        rows: &[String],
+        lit: &[bool],
+        viewport_origin: [f32; 2],
+        viewport_scale: f32,
+        viewport_height: f32,
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+        let mut frame = self.frame.lock().expect("trainer overlay frame lock");
+        let size = [destination.width(), destination.height()];
+        if frame.size != size {
+            frame.depth = gpu.create_depth_texture();
+            frame.size = size;
+        }
+        let camera = CameraUniform {
+            screen_size: [size[0] as f32, size[1] as f32],
+            camera_pos: [0.0; 2],
+            zoom: 1.0,
+            world_origin_y: 0.0,
+            world_height: 1.0,
+            _pad: 0.0,
+            native_z_origin_y: 0.0,
+            _native_z_pad: 0.0,
+        };
+        gpu.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera));
+        // Translucent backdrop so the text stays readable over bright terrain.
+        let pad = 4.0;
+        let bg_x = viewport_origin[0]
+            + (crate::app::debug_tools::TRAINER_PANEL_X - pad) * viewport_scale;
+        let bg_y = viewport_origin[1]
+            + (crate::app::debug_tools::trainer_panel_top(viewport_height) - pad) * viewport_scale;
+        let bg_w = (crate::app::debug_tools::TRAINER_ROW_WIDTH + pad * 2.0) * viewport_scale;
+        let bg_h = (rows.len() as f32 * crate::app::debug_tools::TRAINER_ROW_HEIGHT + pad * 2.0)
+            * viewport_scale;
+        let backdrop = vec![crate::render::batch::SpriteInstance {
+            position: [bg_x, bg_y],
+            size: [bg_w, bg_h],
+            uv_origin: [0.0, 0.0],
+            uv_size: [1.0, 1.0],
+            depth: 0.0,
+            tint: [0.0, 0.0, 0.0],
+            alpha: 0.55,
+            ..Default::default()
+        }];
+        frame.pool.upload(gpu, "trainer_bg", &backdrop);
+        let mut instances = Vec::with_capacity(rows.len() * 64);
+        for (index, label) in rows.iter().enumerate() {
+            // The panel is authored in source (4:3 view) pixels, so it sits
+            // inside the letterboxed playfield rather than in the black bars:
+            // the software pointer cannot leave that area, and a panel outside
+            // it would be unclickable.
+            let x = viewport_origin[0]
+                + crate::app::debug_tools::TRAINER_PANEL_X * viewport_scale;
+            let y = viewport_origin[1]
+                + (crate::app::debug_tools::trainer_panel_top(viewport_height)
+                    + index as f32 * crate::app::debug_tools::TRAINER_ROW_HEIGHT)
+                    * viewport_scale;
+            let glyph_scale = crate::app::debug_tools::TRAINER_GLYPH_SCALE * viewport_scale;
+            // Lit rows are near-white green; off rows stay a dim grey, which is
+            // the whole state display: the panel has no backdrop of its own.
+            let tint = if lit.get(index).copied().unwrap_or(false) {
+                [0.45, 1.0, 0.55]
+            } else {
+                [0.38, 0.38, 0.42]
+            };
+            for (dx, dy) in [(-1.0_f32, 0.0_f32), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                instances.extend(self.font.build_text(
+                    label,
+                    x + dx,
+                    y + dy,
+                    glyph_scale,
+                    0.0,
+                    [0.0; 3],
+                    [0.0; 2],
+                ));
+            }
+            instances.extend(
+                self.font
+                    .build_text(label, x, y, glyph_scale, 0.0, tint, [0.0; 2]),
+            );
+        }
+        frame.pool.upload(gpu, "trainer_panel", &instances);
+        // The backdrop uses the same pass shape as the glyphs: the batch
+        // pipeline declares a Depth32Float attachment, so a pass without one is
+        // a validation error rather than a transparent panel.
+        self.draw_instances(
+            batch,
+            encoder,
+            destination,
+            &mut frame,
+            &self.panel_texture,
+            "trainer_bg",
+            "Window Trainer Backdrop",
+        );
+        self.draw_instances(
+            batch,
+            encoder,
+            destination,
+            &mut frame,
+            self.font.atlas(),
+            "trainer_panel",
+            "Window Trainer",
+        );
     }
 }
 

@@ -9,10 +9,12 @@ use std::collections::VecDeque;
 use crate::sim::cheats::{CheatFlags, TrainerAction};
 
 const MAX_PENDING: usize = 32;
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) enum DebugCommand {
     Toggle { switch: DebugSwitch },
     CycleSpeedType { forward: bool },
@@ -23,6 +25,7 @@ pub(crate) enum DebugCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) enum DebugSwitch {
     TerrainCosts,
     Heightmap,
@@ -34,17 +37,20 @@ pub(crate) enum DebugSwitch {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(feature = "telemetry-dashboard")]
 struct Request {
     session: u64,
     command: DebugCommand,
 }
 
 #[derive(Default)]
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) struct CommandInbox {
     session: Option<u64>,
     pending: VecDeque<DebugCommand>,
 }
 
+#[cfg(feature = "telemetry-dashboard")]
 impl CommandInbox {
     pub(crate) fn set_session(&mut self, session: Option<u64>) {
         if session != self.session {
@@ -84,6 +90,7 @@ impl CommandInbox {
 }
 
 /// A replaced world or a lost viewer invalidates every outstanding request.
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) fn reset_session(state: &mut crate::app::AppState) {
     state.diag.debug_session_epoch = state
         .diag
@@ -115,6 +122,7 @@ fn context(
 }
 
 /// Runs outside tick admission so a paused game can answer a control request.
+#[cfg(feature = "telemetry-dashboard")]
 pub(crate) fn service(state: &mut crate::app::AppState) {
     let active = state.diag.telemetry_active()
         && state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
@@ -198,6 +206,7 @@ pub(crate) fn toggle_inspector(state: &mut crate::app::AppState) {
     }
 }
 
+#[cfg(feature = "telemetry-dashboard")]
 fn apply(state: &mut crate::app::AppState, command: DebugCommand) {
     use crate::app::input::dispatch;
     match command {
@@ -226,6 +235,201 @@ fn apply(state: &mut crate::app::AppState, command: DebugCommand) {
         }
         DebugCommand::FrameStep {} => dispatch::request_debug_frame_step(state),
     }
+}
+
+/// One clickable line of the in-game trainer panel.
+///
+/// The trainer is deliberately small: three switches whose state is visible and
+/// four one-shot buttons. Everything else the engine's cheat flags can do stays
+/// unavailable from this panel so the overlay stays seven lines tall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrainerRow {
+    Tech,
+    PromoteAll,
+    Superweapons,
+    RevealMap,
+    TakeOver,
+    AddMoney,
+    Invincible,
+    GetMcv,
+}
+
+impl TrainerRow {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Tech => "TECH ALL",
+            Self::PromoteAll => "PROMOTE ALL",
+            Self::Superweapons => "SUPERS READY",
+            Self::RevealMap => "REVEAL MAP",
+            Self::TakeOver => "TAKE OVER",
+            Self::AddMoney => "+1M MONEY",
+            Self::Invincible => "INVINCIBLE",
+            Self::GetMcv => "GET A MCV",
+        }
+    }
+
+    /// Switches show their on/off state; the rest are buttons that are merely
+    /// available or not.
+    pub(crate) const fn is_switch(self) -> bool {
+        matches!(self, Self::Tech | Self::RevealMap | Self::Invincible)
+    }
+}
+
+/// Panel rows in display order.
+pub(crate) const TRAINER_ROWS: [TrainerRow; 8] = [
+    TrainerRow::Tech,
+    TrainerRow::PromoteAll,
+    TrainerRow::Superweapons,
+    TrainerRow::RevealMap,
+    TrainerRow::TakeOver,
+    TrainerRow::AddMoney,
+    TrainerRow::Invincible,
+    TrainerRow::GetMcv,
+];
+
+/// Panel geometry in *source* (playfield) pixels. The renderer and the click
+/// hit-test share these, so the rows a player sees are the rows a click lands on.
+pub(crate) const TRAINER_PANEL_X: f32 = 6.0;
+/// Row pitch. Larger than the glyph height, which is the breathing room between
+/// labels; the panel itself stays narrow and small.
+pub(crate) const TRAINER_ROW_HEIGHT: f32 = 20.0;
+pub(crate) const TRAINER_ROW_WIDTH: f32 = 150.0;
+/// Deliberately small glyphs so the panel never competes with the battlefield.
+pub(crate) const TRAINER_GLYPH_SCALE: f32 = 1.4;
+
+/// Top of the panel: flush left, vertically centred in the playfield.
+pub(crate) fn trainer_panel_top(view_height: f32) -> f32 {
+    let total = TRAINER_ROWS.len() as f32 * TRAINER_ROW_HEIGHT;
+    ((view_height - total) * 0.5).max(4.0)
+}
+
+/// Advertise the running match to the simulation once per frame.
+///
+/// The dashboard build did this inside `service`; the panel build has no
+/// dashboard, and `Simulation::set_debug_session_context` is the admission that
+/// makes `trainer_available()` true (`Offline` only for campaign/skirmish with a
+/// live scenario). Repeating the same context is a no-op in the simulation.
+pub(crate) fn sync_session(state: &mut crate::app::AppState) {
+    let active = state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
+        && state.match_state.scenario_exit.is_none()
+        && state.match_state.scenario_outcome.is_none();
+    let context = context(state.match_state.session_mode(), active);
+    if let Some(runtime) = state.match_state.sim_runtime.as_mut() {
+        runtime.simulation.set_debug_session_context(context);
+    }
+}
+
+/// Row under a point in source pixels, if any.
+pub(crate) fn trainer_row_at(point: (f32, f32), view_height: f32) -> Option<TrainerRow> {
+    if point.0 < TRAINER_PANEL_X || point.0 > TRAINER_PANEL_X + TRAINER_ROW_WIDTH {
+        return None;
+    }
+    let index = ((point.1 - trainer_panel_top(view_height)) / TRAINER_ROW_HEIGHT).floor();
+    if index < 0.0 {
+        return None;
+    }
+    TRAINER_ROWS.get(index as usize).copied()
+}
+
+/// Whether each row reads as lit. A switch is lit when it is on; a button is lit
+/// while the trainer can accept it at all.
+pub(crate) fn trainer_row_states(state: &crate::app::AppState) -> Vec<(TrainerRow, bool)> {
+    let Some(runtime) = state.match_state.sim_runtime.as_ref() else {
+        return TRAINER_ROWS.iter().map(|&row| (row, false)).collect();
+    };
+    let simulation = &runtime.simulation;
+    if !simulation.trainer_available() {
+        return TRAINER_ROWS.iter().map(|&row| (row, false)).collect();
+    }
+    let flags = simulation.cheat_flags();
+    TRAINER_ROWS
+        .iter()
+        .map(|&row| {
+            let lit = match row {
+                TrainerRow::Tech => flags.tech_all && flags.tech_boost,
+                TrainerRow::RevealMap => flags.reveal_map,
+                TrainerRow::Invincible => flags.invincible,
+                TrainerRow::PromoteAll
+                | TrainerRow::Superweapons
+                | TrainerRow::TakeOver
+                | TrainerRow::AddMoney => true,
+                // Lit while the next click is already armed for a drop.
+                TrainerRow::GetMcv => state.match_state.trainer_mcv_armed,
+            };
+            (row, lit)
+        })
+        .collect()
+}
+
+/// Apply one panel row. Returns whether the trainer accepted it.
+pub(crate) fn activate_trainer_row(
+    state: &mut crate::app::AppState,
+    row: TrainerRow,
+) -> bool {
+    // Arming is client-side and must not touch the simulation; the click that
+    // consumes it spawns through `Simulation::trainer_drop_mcv`.
+    if row == TrainerRow::GetMcv {
+        let available = state
+            .match_state
+            .sim_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.simulation.trainer_available());
+        if !available {
+            return false;
+        }
+        state.match_state.trainer_mcv_armed = true;
+        log::info!("Trainer: the next tactical click drops an MCV");
+        return true;
+    }
+    let Some(runtime) = state.match_state.sim_runtime.as_mut() else {
+        return false;
+    };
+    if !runtime.simulation.trainer_available() {
+        return false;
+    }
+    match row {
+        TrainerRow::Tech | TrainerRow::RevealMap | TrainerRow::Invincible => {
+            let mut flags = runtime.simulation.cheat_flags();
+            match row {
+                TrainerRow::Tech => {
+                    let on = !(flags.tech_all && flags.tech_boost);
+                    flags.tech_all = on;
+                    flags.tech_boost = on;
+                }
+                TrainerRow::RevealMap => flags.reveal_map = !flags.reveal_map,
+                TrainerRow::Invincible => flags.invincible = !flags.invincible,
+                _ => unreachable!(),
+            }
+            if runtime.simulation.set_cheat_flags(flags).is_err() {
+                return false;
+            }
+            runtime
+                .simulation
+                .apply_debug_tools(&runtime.resources.rules);
+            state.match_state.sandbox_full_visibility = runtime.simulation.debug_reveal_map();
+        }
+        TrainerRow::GetMcv => unreachable!("handled before the simulation borrow"),
+        TrainerRow::PromoteAll
+        | TrainerRow::Superweapons
+        | TrainerRow::TakeOver
+        | TrainerRow::AddMoney => {
+            let action = match row {
+                TrainerRow::PromoteAll => crate::sim::cheats::TrainerAction::VeteranAll,
+                TrainerRow::Superweapons => crate::sim::cheats::TrainerAction::SuperweaponsReady,
+                TrainerRow::TakeOver => crate::sim::cheats::TrainerAction::TakeSelection,
+                TrainerRow::AddMoney => crate::sim::cheats::TrainerAction::AddMoney,
+                _ => unreachable!(),
+            };
+            let applied = runtime.simulation.request_trainer_action(action).is_ok();
+            if applied {
+                runtime
+                    .simulation
+                    .apply_debug_tools(&runtime.resources.rules);
+            }
+            return applied;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
