@@ -39,7 +39,12 @@ impl App {
             std::env::var_os("RA2_QUICKPLAY").is_none(),
             "-SPAWN cannot be combined with RA2_QUICKPLAY"
         );
-        let request = SpawnRequest::read(std::path::Path::new("spawn.ini"))?;
+        // A launcher gives every map its own directory, so it names the launch
+        // file explicitly; the retail client keeps writing `spawn.ini` in cwd.
+        let spawn_path = std::env::var_os("RA2_SPAWN_INI")
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| std::path::PathBuf::from("spawn.ini"), std::path::PathBuf::from);
+        let request = SpawnRequest::read(&spawn_path)?;
         let mut app = Self::new(options);
         app.spawn_request = Some(request);
         Ok(app)

@@ -275,6 +275,15 @@ impl GameConfig {
                 *path = directory.join(&*path);
             }
         }
+        // `RA2_DIR` lets a launcher borrow an asset root for one process without
+        // editing the shared config, so a direct launch always sees the pristine
+        // install. Diagnostic/tooling override only — no gamemd counterpart.
+        if let Some(root) = std::env::var_os("RA2_DIR") {
+            let root = PathBuf::from(root);
+            if !root.as_os_str().is_empty() {
+                config.paths.ra2_dir = root;
+            }
+        }
         config.paths.separate_settings_from_assets()?;
 
         log::info!("Loaded config from {}", path.display());
