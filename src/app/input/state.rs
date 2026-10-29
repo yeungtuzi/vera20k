@@ -221,6 +221,10 @@ pub(crate) struct MatchInputState {
     /// The source cursor above remains authoritative; this anchor is neither
     /// saved nor simulation state and is discarded when pointer focus changes.
     last_cursor_window: Option<(f32, f32)>,
+    /// A left press was swallowed by the debug trainer panel, so the matching
+    /// release must be swallowed too: otherwise it reaches `band_box_left_up`
+    /// and turns into a selection or a movement order on the map.
+    pub(crate) trainer_panel_pressed: bool,
     pub(crate) keys_held: HashSet<KeyCode>,
     /// Whether the last window event found the match paused, and the keys
     /// released since then: a pause admits no held-key change, so its end
@@ -491,6 +495,7 @@ impl MatchInputState {
             cursor_y: 0.0,
             cursor_zoom: None,
             last_cursor_window: None,
+            trainer_panel_pressed: false,
             keys_held: HashSet::new(),
             paused_at_last_event: false,
             released_while_paused: HashSet::new(),

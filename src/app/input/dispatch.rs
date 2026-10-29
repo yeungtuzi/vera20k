@@ -346,11 +346,48 @@ pub(crate) fn tactical_mouse(state: &mut AppState, button: MouseButton, btn_stat
                 // clear it exits having done nothing; with it set it runs
                 // BandBox_LeftUp and drops the capture, whichever button was
                 // holding it. See `TacticalMouseState::end_left_press`.
+                #[cfg(feature = "debug-tools")]
+                if state.match_state.input.trainer_panel_pressed {
+                    state.match_state.input.trainer_panel_pressed = false;
+                    state.platform.window.request_redraw();
+                    return;
+                }
                 // VERA formation line: the drag ends with the button,
                 // whether or not the capture below is still held.
                 let formation = state.match_state.input.formation_line.finish();
                 if !state.match_state.input.tactical_mouse.end_left_press() {
                     return;
+                }
+                // Debug trainer "GET A MCV": this click is the drop, not a
+                // selection or an order. A refused cell (water, blocked, a
+                // building) keeps the slot armed instead of wasting it.
+                #[cfg(feature = "debug-tools")]
+                if state.match_state.trainer_mcv_armed {
+                    state.match_state.trainer_mcv_armed = false;
+                    let cell = crate::app::match_runtime::sim_tick::screen_point_to_world_cell(
+                        state,
+                        state.match_state.input.cursor_x,
+                        state.match_state.input.cursor_y,
+                    );
+                    let dropped = match state
+                        .match_state
+                        .sim_runtime
+                        .write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug)
+                    {
+                        Some(runtime) => {
+                            let resources = &runtime.resources;
+                            runtime
+                                .simulation
+                                .trainer_drop_mcv(cell.0, cell.1, &resources.rules)
+                                .is_some()
+                        }
+                        None => false,
+                    };
+                    if dropped {
+                        state.platform.window.request_redraw();
+                        return;
+                    }
+                    state.match_state.trainer_mcv_armed = true;
                 }
                 // A drawn line or block orders the group; a line too short
                 // to be one is the ordinary click below.
@@ -361,6 +398,7 @@ pub(crate) fn tactical_mouse(state: &mut AppState, button: MouseButton, btn_stat
                     // As BandBox_LeftUp ends the attack-move mode (`0x00731CF0`).
                     state.match_state.input.queued_order_mode = OrderMode::Move;
                     return;
+                }
                 }
                 band_box_left_up(state, LeftUp::Tactical);
             }
