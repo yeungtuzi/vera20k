@@ -28,6 +28,10 @@ name = "asset"
 path = "src/bin/asset.rs"
 
 [[bin]]
+name = "map-tool"
+path = "src/bin/map-tool.rs"
+
+[[bin]]
 name = "extract-ini"
 path = "src/bin/extract-ini.rs"
 
@@ -90,26 +94,7 @@ dev-overlays = ["vera20k-core/dev-overlays"]
 telemetry-dashboard = ["vera20k-core/telemetry", "dep:sha1"]
 # Explicit offline trainer and per-unit event hooks. Never enabled by the
 # dashboard alone or the default/shipping feature set.
-debug-tools = ["telemetry-dashboard", "dev-overlays", "vera20k-core/debug-tools"]
-# A focused test build (tools/README.md, "Test groups"): with `test-focus` only
-# the test groups whose `tests-*` feature is on compile. Without it every test
-# compiles, so a plain `cargo test` is always the full suite. Neither reaches
-# `vera20k-core`, whose own tests have their own groups.
-test-focus = []
-tests-app = []
-tests-app-frontend = []
-tests-app-input-a-c = []
-tests-app-input-d-z = []
-tests-app-match = []
-tests-app-presentation = []
-tests-app-presentation-instances = []
-tests-app-presentation-render = []
-tests-asset-tools = []
-tests-audio = []
-tests-render-a-r = []
-tests-render-s-z = []
-tests-root = []
-tests-ui = []
+debug-tools = ["dev-overlays", "vera20k-core/debug-tools"]
 
 [dependencies]
 # The GPU-free engine. Its dev features follow this package's.

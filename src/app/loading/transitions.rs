@@ -785,6 +785,17 @@ pub(crate) fn apply_map_load_result(state: &mut AppState, result: init::MapLoadR
     // keeps its own fog in the shared world.
     state.match_state.sandbox_full_visibility = result.scenario.sandbox_full_visibility
         || crate::app::match_runtime::watching::active(state);
+    // A loaded scenario is a new match: the trainer starts with every switch
+    // off, so "load a save" can never inherit invincibility or any other cheat
+    // left on in the previous world.
+    #[cfg(feature = "debug-tools")]
+    if let Some(runtime) = state
+        .match_state
+        .sim_runtime
+        .write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug)
+    {
+        runtime.simulation.clear_debug_tools();
+    }
 
     // `Start_Scenario @ 0x00683AB0` after `Read_Scenario`: `[Basic] Theme`
     // resolves through `From_Name` (`0x004758F0`); -1 -> `Stop(fade=1)` of the
