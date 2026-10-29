@@ -488,10 +488,24 @@ impl ResolvedTerrainGrid {
         size_width: i32,
         selector: &mut TileVariantSelectionContext<'_, '_>,
     ) -> Result<(), SavedTerrainError> {
+        // Diagnostic: a saved terrain can reference a variant the catalog never
+        // registered. Log what this load path sees, so a save/load mismatch can be
+        // compared against the same numbers captured while playing.
+        log::info!(
+            "saved-load terrain: extension={} tileset_names={} ini_bytes={} selector_initialized={}",
+            theater.extension,
+            theater.lookup.len(),
+            theater.ini_data.len(),
+            selector.selector().initialized_table().is_some()
+        );
         let clear_tile = theater.rmg_tiles.clear_tile.unwrap_or(0);
         let mut catalog =
             self.saved_presentation_catalog(theater, assets, rules, lat_enabled, cliff_back);
         catalog.bind_selector(selector.selector());
+        let (variants_472, bound) = catalog.diagnostic_variants(472);
+        log::info!(
+            "saved-load catalog: tile472_variants={variants_472} selector_bound={bound}"
+        );
         let mut visited = Vec::new();
         for cell in self.native_cell_iterator(size_width) {
             catalog

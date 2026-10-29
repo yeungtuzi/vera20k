@@ -139,12 +139,41 @@ pub(crate) struct BridgeRecalcCatalog {
 }
 
 impl BridgeRecalcCatalog {
+    /// Diagnostic: how many variants this catalog holds for a tile, and whether
+    /// its selector was bound.
+    pub(super) fn diagnostic_variants(&self, tile: u16) -> (usize, bool) {
+        (
+            self.files.get(&tile).map_or(0, |variants| variants.len()),
+            self.selector.initialized_table().is_some(),
+        )
+    }
+
     fn file(&self, tile: u16, variant: u8) -> Result<&ResidentBridgeTmp, BridgeRecalcCatalogError> {
-        self.files
+        let variants = self
+            .files
             .get(&tile)
             .ok_or(BridgeRecalcCatalogError::Uncached {
                 tile: i32::from(tile),
-            })?
+            })?;
+        // A saved template can name a variant this catalog does not hold (the
+        // live session registered one more file for the tile than the load path
+        // rebuilds). Refusing the whole save over a presentation variant loses
+        // the game state; fall back to the tile's last registered file instead.
+        if usize::from(variant) >= variants.len() {
+            log::warn!(
+                "recalc tile {tile}: saved variant {variant} exceeds {} registered; using the last",
+                variants.len()
+            );
+            return variants
+                .last()
+                .ok_or_else(|| BridgeRecalcCatalogError::Unavailable {
+                    tile,
+                    reason: "no registered TMP file".into(),
+                })?
+                .as_deref()
+                .map_err(Clone::clone);
+        }
+        variants
             .get(usize::from(variant))
             .ok_or_else(|| {
                 // Diagnostic: a saved terrain references a variant this session
