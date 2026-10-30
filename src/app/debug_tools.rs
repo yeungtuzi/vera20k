@@ -252,6 +252,7 @@ pub(crate) enum TrainerRow {
     TakeOver,
     AddMoney,
     Invincible,
+    DeadlyShot,
     GetMcv,
 }
 
@@ -265,6 +266,7 @@ impl TrainerRow {
             Self::TakeOver => "TAKE OVER",
             Self::AddMoney => "+1M MONEY",
             Self::Invincible => "INVINCIBLE",
+            Self::DeadlyShot => "DEADLY SHOT",
             Self::GetMcv => "GET A MCV",
         }
     }
@@ -272,12 +274,15 @@ impl TrainerRow {
     /// Switches show their on/off state; the rest are buttons that are merely
     /// available or not.
     pub(crate) const fn is_switch(self) -> bool {
-        matches!(self, Self::Tech | Self::RevealMap | Self::Invincible)
+        matches!(
+            self,
+            Self::Tech | Self::RevealMap | Self::Invincible | Self::DeadlyShot
+        )
     }
 }
 
 /// Panel rows in display order.
-pub(crate) const TRAINER_ROWS: [TrainerRow; 8] = [
+pub(crate) const TRAINER_ROWS: [TrainerRow; 9] = [
     TrainerRow::Tech,
     TrainerRow::PromoteAll,
     TrainerRow::Superweapons,
@@ -285,6 +290,7 @@ pub(crate) const TRAINER_ROWS: [TrainerRow; 8] = [
     TrainerRow::TakeOver,
     TrainerRow::AddMoney,
     TrainerRow::Invincible,
+    TrainerRow::DeadlyShot,
     TrainerRow::GetMcv,
 ];
 
@@ -350,6 +356,8 @@ pub(crate) fn trainer_row_states(state: &crate::app::AppState) -> Vec<(TrainerRo
                 TrainerRow::Tech => flags.tech_all && flags.tech_boost,
                 TrainerRow::RevealMap => flags.reveal_map,
                 TrainerRow::Invincible => flags.invincible,
+                // Any multiplier above the neutral value is the one-hit kill.
+                TrainerRow::DeadlyShot => flags.damage_scale > 1,
                 TrainerRow::PromoteAll
                 | TrainerRow::Superweapons
                 | TrainerRow::TakeOver
@@ -389,7 +397,7 @@ pub(crate) fn activate_trainer_row(
         return false;
     }
     match row {
-        TrainerRow::Tech | TrainerRow::RevealMap | TrainerRow::Invincible => {
+        TrainerRow::Tech | TrainerRow::RevealMap | TrainerRow::Invincible | TrainerRow::DeadlyShot => {
             let mut flags = runtime.simulation.cheat_flags();
             match row {
                 TrainerRow::Tech => {
@@ -399,6 +407,15 @@ pub(crate) fn activate_trainer_row(
                 }
                 TrainerRow::RevealMap => flags.reveal_map = !flags.reveal_map,
                 TrainerRow::Invincible => flags.invincible = !flags.invincible,
+                // One-hit kill is the existing per-house damage multiplier at
+                // its documented maximum; the neutral value is 1.
+                TrainerRow::DeadlyShot => {
+                    flags.damage_scale = if flags.damage_scale > 1 {
+                        1
+                    } else {
+                        crate::sim::cheats::MAX_DAMAGE_SCALE
+                    };
+                }
                 _ => unreachable!(),
             }
             if runtime.simulation.set_cheat_flags(flags).is_err() {
