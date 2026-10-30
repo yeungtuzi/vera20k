@@ -680,6 +680,38 @@ fn launch(arguments: &[String]) -> Result<(), String> {
     if !same_file {
         std::fs::copy(&map_path, &staged).map_err(|error| format!("stage map: {error}"))?;
     }
+    // A campaign continues into its `NextScenario`, which the engine resolves
+    // beside `spawn.ini`. Stage the whole map directory so a finished mission can
+    // start the next one instead of failing with "error reading map".
+    if let Some(source_dir) = map_path.parent() {
+        if let Ok(entries) = std::fs::read_dir(source_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let supported = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        ["map", "mpr", "yrm", "mmx", "yro"]
+                            .iter()
+                            .any(|known| ext.eq_ignore_ascii_case(known))
+                    });
+                if !supported {
+                    continue;
+                }
+                let Some(name) = path.file_name() else {
+                    continue;
+                };
+                if name == file_name {
+                    continue;
+                }
+                let target = run_dir.join(name);
+                if target.is_file() {
+                    continue;
+                }
+                let _ = std::fs::copy(&path, &target);
+            }
+        }
+    }
 
     let campaign = campaign.or_else(|| campaign_for(&map_path));
     let text = if let Some((id, side)) = campaign {
