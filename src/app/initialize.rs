@@ -589,11 +589,16 @@ impl App {
         terrain_draw_renderer.generate_ion_blast_frames(&gpu.device, &gpu.queue);
         terrain_draw_renderer.set_gpu_timer(gpu.timer.clone());
         let combat_light_renderer = crate::render::combat_light::CombatLightRenderer::new(&gpu);
-        let performance_overlay =
+        let mut performance_overlay =
             crate::app::diagnostics::performance_overlay::PerformanceOverlay::new(
                 &gpu,
                 &batch_renderer,
             );
+        // Launcher convenience: show the performance readout from the start
+        // instead of pressing Ctrl+Alt+F in game.
+        if std::env::var_os("VERA_FPS_COUNTER").is_some() {
+            performance_overlay.set_visible(true);
+        }
         let window_ui =
             crate::app::presentation::window_ui::WindowUi::new(&gpu.device, &batch_renderer);
         let depth_view: wgpu::TextureView = gpu.create_depth_texture();
