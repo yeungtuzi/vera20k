@@ -33,6 +33,6 @@ pub(crate) fn summary(start: Instant) -> String {
     let fps = if seconds > 0.0 { frames as f64 / seconds } else { 0.0 };
     let adapter = ADAPTER.lock().map(|a| a.clone()).unwrap_or_default();
     format!(
-        "Performance summary: adapter={}, frames={frames}, seconds={seconds:.1}, avg_fps={fps:.1}"
+        "Performance summary: adapter={adapter}, frames={frames}, seconds={seconds:.1}, avg_fps={fps:.1}"
     )
 }
