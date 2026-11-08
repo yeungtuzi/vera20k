@@ -3,6 +3,7 @@
 //! in `app::match_diagnostics`.
 
 pub(crate) mod core_load;
+pub(crate) mod frame_stats;
 pub(crate) mod debug_overlays;
 pub(crate) mod performance_overlay;
 pub(crate) mod shell_capture;

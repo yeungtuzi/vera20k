@@ -224,6 +224,7 @@ pub fn run_with_loop(
     // its loop and hands the panic back here (macOS and Windows catch it in
     // their callbacks; elsewhere it unwinds straight out), with `app` intact.
     // Save the replay, then let the panic end the process as before.
+    let perf_start = crate::util::time::Instant::now();
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         event_loop.run_app(&mut app)
     }));
@@ -238,6 +239,7 @@ pub fn run_with_loop(
     let spawn_status = app.finish_spawn_launch();
     app.finish_capture()?;
 
+    log::info!("{}", crate::app::diagnostics::frame_stats::summary(perf_start));
     log::info!("VERA20k shut down cleanly");
     Ok(spawn_status.unwrap_or(0))
 }

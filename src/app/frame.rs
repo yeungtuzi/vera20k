@@ -710,6 +710,7 @@ impl App {
         mut hidden_run: Option<&mut crate::app::hidden_run::HiddenRun>,
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
+        crate::app::diagnostics::frame_stats::note_frame();
         // The glyph atlas empties or grows only between frames, while no
         // instance built from it is waiting to draw.
         state
