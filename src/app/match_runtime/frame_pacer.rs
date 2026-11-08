@@ -851,9 +851,14 @@ fn pacing_timer(game_speed: u8, network_fps: Option<(u16, u32)>) -> Option<Pacin
             length: network_interval_ms(fps).saturating_add(delay),
         });
     }
+    // Retail's speed slider is slow (0) to fast (6); the timer is a frame
+    // interval, so invert it: 6 -> one bucket, 1 -> six buckets.
     (game_speed != 0).then(|| PacingTimer {
         buckets: true,
-        length: u32::from(game_speed.clamp(MIN_TIMED_GAME_SPEED, MAX_TIMED_GAME_SPEED)),
+        length: u32::from(
+            MAX_TIMED_GAME_SPEED + 1
+                - game_speed.clamp(MIN_TIMED_GAME_SPEED, MAX_TIMED_GAME_SPEED),
+        ),
     })
 }
 
