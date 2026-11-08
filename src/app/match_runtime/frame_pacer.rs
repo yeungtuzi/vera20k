@@ -851,9 +851,15 @@ fn pacing_timer(game_speed: u8, network_fps: Option<(u16, u32)>) -> Option<Pacin
             length: network_interval_ms(fps).saturating_add(delay),
         });
     }
-    (game_speed != 0).then(|| PacingTimer {
+    // Reunion Lite's slider is slow (0) to fast (6). 6 is uncapped; 5 paces
+    // one 60 Hz frame per tick, and each step below it adds one bucket.
+    if game_speed >= MAX_TIMED_GAME_SPEED {
+        return None;
+    }
+    let speed = game_speed.min(MAX_TIMED_GAME_SPEED - 1);
+    Some(PacingTimer {
         buckets: true,
-        length: u32::from(game_speed.clamp(MIN_TIMED_GAME_SPEED, MAX_TIMED_GAME_SPEED)),
+        length: u32::from(MAX_TIMED_GAME_SPEED - speed),
     })
 }
 
@@ -1423,14 +1429,18 @@ mod tests {
 
     #[test]
     fn timed_speeds_require_the_exact_bucket_distance() {
-        for speed in MIN_TIMED_GAME_SPEED..=MAX_TIMED_GAME_SPEED {
+        for speed in MIN_TIMED_GAME_SPEED..MAX_TIMED_GAME_SPEED {
             let mut pacer = LocalFramePacer::new();
             pacer.record_admitted_frame(32);
-            let deadline = 32 + u64::from(speed) * FRAME_BUCKET_MS;
+            let buckets = u64::from(MAX_TIMED_GAME_SPEED - speed);
+            let deadline = 32 + buckets * FRAME_BUCKET_MS;
             assert!(!pacer.should_admit(deadline - 1, speed, None, false));
             assert!(pacer.should_admit(deadline, speed, None, false));
             assert_eq!(pacer.next_deadline_ms(speed), Some(deadline));
         }
+        let mut pacer = LocalFramePacer::new();
+        pacer.record_admitted_frame(32);
+        assert_eq!(pacer.next_deadline_ms(MAX_TIMED_GAME_SPEED), None);
     }
 
     #[test]
