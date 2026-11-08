@@ -851,13 +851,15 @@ fn pacing_timer(game_speed: u8, network_fps: Option<(u16, u32)>) -> Option<Pacin
             length: network_interval_ms(fps).saturating_add(delay),
         });
     }
-    // Retail's speed slider is slow (0) to fast (6); the timer is a frame
-    // interval, so invert it: 6 -> one bucket, 0 -> seven buckets. Every
-    // slider position is paced, so the order stays monotonic.
-    let speed = game_speed.min(MAX_TIMED_GAME_SPEED);
+    // Retail's speed slider is slow (0) to fast (6). 6 is uncapped; 5 paces
+    // one 60 Hz frame per tick, and each step below it adds one bucket.
+    if game_speed >= MAX_TIMED_GAME_SPEED {
+        return None;
+    }
+    let speed = game_speed.min(MAX_TIMED_GAME_SPEED - 1);
     Some(PacingTimer {
         buckets: true,
-        length: u32::from(MAX_TIMED_GAME_SPEED + 1 - speed),
+        length: u32::from(MAX_TIMED_GAME_SPEED - speed),
     })
 }
 
