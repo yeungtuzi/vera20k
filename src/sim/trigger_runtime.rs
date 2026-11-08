@@ -1412,9 +1412,16 @@ impl Simulation {
                 &mut self.interner,
                 rules,
             );
-        if diagnostics
-            .iter()
-            .any(crate::sim::team_script_vm::TeamAiInstallDiagnostic::is_fixed_source_refusal)
+        // Reunion-style mods ship AIMD task forces that name members the
+        // current RuleSet cannot resolve.  Upstream refuses the whole install;
+        // with VERA_TOLERANT_AI the unknown members stay dropped (they were
+        // filtered out while building the registry) and the rest of the team
+        // AI installs, which is what campaign launching wants.
+        let tolerant = std::env::var_os("VERA_TOLERANT_AI").is_some();
+        if !tolerant
+            && diagnostics
+                .iter()
+                .any(crate::sim::team_script_vm::TeamAiInstallDiagnostic::is_fixed_source_refusal)
         {
             return Err(diagnostics);
         }
