@@ -7780,9 +7780,16 @@ impl Simulation {
     > {
         let (vm, diagnostics) =
             TeamScriptVm::from_ini_registry(registry, &mut self.interner, rules);
-        if diagnostics
-            .iter()
-            .any(crate::sim::team_script_vm::TeamAiInstallDiagnostic::is_fixed_source_refusal)
+        // Reunion-style mods ship AIMD files with members the current RuleSet
+        // does not know (custom units, renamed types).  Upstream refuses the
+        // whole install; with VERA_TOLERANT_AI the unknown members are simply
+        // dropped (they were already filtered out above) and the rest of the
+        // team AI installs, which is what the launcher wants for campaigns.
+        let tolerant = std::env::var_os("VERA_TOLERANT_AI").is_some();
+        if !tolerant
+            && diagnostics
+                .iter()
+                .any(crate::sim::team_script_vm::TeamAiInstallDiagnostic::is_fixed_source_refusal)
         {
             return Err(diagnostics);
         }
