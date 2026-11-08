@@ -323,7 +323,13 @@ impl App {
                 std::env::var_os("RA2_QUICKPLAY").is_none(),
                 "-SPAWN cannot be combined with RA2_QUICKPLAY"
             );
-            Self::new_spawn_at(std::path::Path::new("spawn.ini"), options)
+            // A packaged app changes its working directory to the user data
+            // folder before reading the launch file, so a launcher must be able
+            // to point at the prepared Run/spawn.ini explicitly.
+            let spawn_path = std::env::var_os("RA2_SPAWN_INI")
+                .filter(|value| !value.is_empty())
+                .map_or_else(|| std::path::PathBuf::from("spawn.ini"), std::path::PathBuf::from);
+            Self::new_spawn_at(&spawn_path, options)
         })();
         match app {
             Ok(mut app) => {
