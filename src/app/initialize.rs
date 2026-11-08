@@ -984,6 +984,7 @@ impl App {
                 capture_dimensions.map(|(w, h)| PhysicalSize::new(w, h)),
             ),
             match_state: crate::app::match_runtime::state::MatchState {
+                trainer_mcv_armed: false,
                 campaign_names: Default::default(),
                 session: Default::default(),
                 network_wait: Default::default(),

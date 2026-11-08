@@ -482,6 +482,12 @@ impl TeamAiInstallDiagnostic {
     /// `0x0041E754`. Mental Omega 3.3.6's AIMO ships one such trigger
     /// (`FOETR176LB-G` -> `FOETT176LB-G`).
     pub(crate) fn is_fixed_source_refusal(&self) -> bool {
+        // Experimental: Reunion mission packs ship partial AI roots whose
+        // unit names do not all exist in the mod's rulesmd.ini.  Dropping the
+        // unknown members is better than refusing the whole mission.
+        if std::env::var_os("VERA_TOLERANT_AI").is_some() {
+            return false;
+        }
         self.source() == TeamAiDefinitionSource::FixedAimd
             && !matches!(self, Self::MissingAiTriggerTeamType { .. })
     }

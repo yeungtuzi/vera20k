@@ -718,7 +718,7 @@ impl App {
     ) -> Result<FrameRenderOutcome> {
         // Hold the presentation to the configured frame rate. The window uses
         // Fifo, so without this a 144 Hz panel renders 144 frames a second.
-        if shell_capture.is_none() && tactical_capture.is_none() {
+        if shell_capture.is_none() {
             crate::app::present_cap::pace_frame(state.platform.window.has_focus());
         }
         // The glyph atlas empties or grows only between frames, while no
