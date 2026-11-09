@@ -65,6 +65,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod display_target;
 mod frame;
 mod present_cap;
+pub(crate) mod quit_guard;
 pub mod frontend;
 mod game_data_check;
 mod handler;

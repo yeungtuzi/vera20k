@@ -716,6 +716,14 @@ impl App {
         mut hidden_run: Option<&mut crate::app::hidden_run::HiddenRun>,
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
+        // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
+        // request here, never a process exit.
+        if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
+            && !state.match_state.match_presentation.in_game_menu.is_open()
+            && crate::app::quit_guard::take_quit_request()
+        {
+            crate::app::input::dispatch::open_pause_menu(state);
+        }
         crate::app::diagnostics::frame_stats::note_frame();
         // Hold the presentation to the configured frame rate. The window uses
         // Fifo, so without this a 144 Hz panel renders 144 frames a second.
