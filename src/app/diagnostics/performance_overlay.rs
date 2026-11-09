@@ -335,6 +335,7 @@ impl PerformanceOverlay {
     /// Draw the offline trainer's fixed rows over the 4:3 playfield. `origin`
     /// and `scale` come from the tactical zoom, so a panel click maps back to
     /// the source pixels the hit test reads.
+    #[cfg(feature = "debug-tools")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_trainer(
         &self,
