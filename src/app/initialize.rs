@@ -992,6 +992,7 @@ impl App {
                 launch_window_size,
             ),
             match_state: crate::app::match_runtime::state::MatchState {
+                trainer_mcv_armed: false,
                 campaign_names: Default::default(),
                 session: Default::default(),
                 network_wait: Default::default(),

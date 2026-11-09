@@ -420,6 +420,66 @@ impl PerformanceOverlay {
         );
     }
 
+    /// Draw the offline trainer's fixed rows over the 4:3 playfield. `origin`
+    /// and `scale` come from the tactical zoom, so a panel click maps back to
+    /// the source pixels the hit test reads.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_trainer(
+        &self,
+        gpu: &GpuContext,
+        batch: &BatchRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        destination: &wgpu::Texture,
+        font: &BitFont,
+        rows: &[String],
+        lit: &[bool],
+        origin: [f32; 2],
+        scale: f32,
+        view_height: f32,
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+        let mut frame = self.frame.lock().expect("trainer overlay frame lock");
+        let top = crate::app::debug_tools::trainer_panel_top(view_height);
+        let row_height = crate::app::debug_tools::TRAINER_ROW_HEIGHT;
+        let mut instances = Vec::with_capacity(rows.len() * 8);
+        for (index, (label, on)) in rows.iter().zip(lit).enumerate() {
+            let text = format!("{} {}", if *on { "[x]" } else { "[ ]" }, label);
+            let x = origin[0] + 8.0 * scale;
+            let y = origin[1] + (top + index as f32 * row_height) * scale;
+            let tint = if *on { [0.35, 1.0, 0.35] } else { [0.85, 0.85, 0.85] };
+            for (dx, dy, color) in [
+                (-1.0, 0.0, [0.0; 3]),
+                (1.0, 0.0, [0.0; 3]),
+                (0.0, -1.0, [0.0; 3]),
+                (0.0, 1.0, [0.0; 3]),
+                (0.0, 0.0, tint),
+            ] {
+                instances.extend(font.build_text(
+                    &text,
+                    x + dx * scale,
+                    y + dy * scale,
+                    scale,
+                    0.0,
+                    color,
+                    [0.0; 2],
+                ));
+            }
+        }
+        let count = instances.len() as u32;
+        self.draw(
+            gpu,
+            batch,
+            encoder,
+            destination,
+            &mut frame,
+            "trainer_panel",
+            &instances,
+            &[(font.atlas(), 0, count)],
+        );
+    }
+
     /// Upload `instances` and draw each `(texture, start, count)` range of
     /// them in order over the window surface.
     #[allow(clippy::too_many_arguments)]

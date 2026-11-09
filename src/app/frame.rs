@@ -1505,11 +1505,12 @@ impl App {
                     )
                 })
                 .unwrap_or(([0.0, 0.0], 1.0, state.platform.window.inner_size().height as f32));
-            state.renderer.fps_overlay.encode_trainer(
+            state.renderer.performance_overlay.encode_trainer(
                 &state.renderer.gpu,
                 &state.renderer.batch_renderer,
                 &mut encoder,
                 &output.texture,
+                &state.renderer.bit_font,
                 &rows,
                 &lit,
                 origin,
