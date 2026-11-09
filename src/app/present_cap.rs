@@ -65,18 +65,16 @@ pub(crate) fn pace_frame(focused: bool) {
         return;
     };
     let slot = Duration::from_secs_f64(1.0 / f64::from(hz));
-    let last = LAST.with(|cell| {
-        let previous = cell.get();
-        cell.set(Some(Instant::now()));
-        previous
-    });
-    let Some(last) = last else {
-        return;
-    };
-    let elapsed = last.elapsed();
-    if elapsed < slot {
-        std::thread::sleep(slot - elapsed);
+    if let Some(last) = LAST.with(std::cell::Cell::get) {
+        let deadline = last + slot;
+        let now = Instant::now();
+        if now < deadline {
+            std::thread::sleep(deadline - now);
+        }
     }
+    // The slot starts after the sleep, not before it: setting this first made
+    // frames alternate short/long and overshoot the cap by ~50%.
+    LAST.with(|cell| cell.set(Some(Instant::now())));
 }
 
 #[cfg(test)]
