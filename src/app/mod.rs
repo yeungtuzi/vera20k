@@ -65,6 +65,7 @@ pub(crate) mod diagnostics;
 /// VERA's profile value and the window system's monitors.
 pub(crate) mod display_target;
 mod frame;
+pub(crate) mod quit_guard;
 pub mod frontend;
 mod game_data_check;
 #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
