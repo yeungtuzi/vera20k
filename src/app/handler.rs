@@ -1137,6 +1137,25 @@ impl ApplicationHandler for App {
                 // recorded before screen-specific dispatch own this state.
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // The default macOS menu is disabled, so Cmd+Q arrives here
+                // instead of terminating the app. Route it to the in-game
+                // pause menu: there is no autosave, and losing a match to a
+                // system shortcut is not acceptable.
+                #[cfg(target_os = "macos")]
+                if event.state.is_pressed()
+                    && !event.repeat
+                    && state.platform.live_modifiers.super_key()
+                    && !state.platform.live_modifiers.control_key()
+                    && !state.platform.live_modifiers.alt_key()
+                    && matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ))
+                {
+                    if state.frontend.screen == GameScreen::InGame
+                        && !state.match_state.match_presentation.in_game_menu.is_open()
+                    {
+                        crate::app::input::dispatch::open_pause_menu(state);
+                    }
+                    return;
+                }
                 // An open composition owns the keys (`app::input::ime`).
                 if event.state.is_pressed() && state.platform.ime.composing() {
                     return;

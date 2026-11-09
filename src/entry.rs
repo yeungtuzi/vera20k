@@ -112,6 +112,14 @@ fn run_with_args(app_bundle: bool, args: impl IntoIterator<Item = OsString>) -> 
     // Create the OS event loop. This drives the entire application:
     // window events, input, redraws, lifecycle events.
     let mut builder = EventLoop::builder();
+    // macOS installs a default menu whose Quit item owns Cmd+Q and terminates
+    // the app before winit sees the key. The game has no autosave, so route
+    // Cmd+Q through the ordinary Escape/menu path instead (see handler.rs).
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_default_menu(false);
+    }
     // A `-SPAWN` test run with its opt-in invisible window (tools/spawn/README.md)
     // and a hidden map-picture run also stay out of the Dock and menu bar.
     #[cfg(target_os = "macos")]
