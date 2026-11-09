@@ -65,6 +65,7 @@ pub(crate) mod diagnostics;
 /// VERA's profile value and the window system's monitors.
 pub(crate) mod display_target;
 mod frame;
+pub(crate) mod quit_guard;
 pub mod frontend;
 mod game_data_check;
 mod handler;
