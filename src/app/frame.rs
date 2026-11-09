@@ -727,7 +727,12 @@ impl App {
         crate::app::diagnostics::frame_stats::note_frame();
         // Hold the presentation to the configured frame rate. The window uses
         // Fifo, so without this a 144 Hz panel renders 144 frames a second.
-        if shell_capture.is_none() {
+        // The top slider position leaves simulation pacing uncapped; holding
+        // presentation at 60 fps would then bottleneck the only thread that
+        // advances it. Below the top speed, cap the display refresh.
+        let (game_speed, _) =
+            crate::app::match_runtime::sim_tick::local_pacing_inputs(state);
+        if shell_capture.is_none() && game_speed < 6 {
             crate::app::present_cap::pace_frame(state.platform.window.has_focus());
         }
         // The glyph atlas empties or grows only between frames, while no
