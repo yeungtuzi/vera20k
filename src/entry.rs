@@ -127,6 +127,7 @@ fn run_with_args(app_bundle: bool, args: impl IntoIterator<Item = OsString>) -> 
         builder.with_activation_policy(ActivationPolicy::Prohibited);
     }
     let event_loop: EventLoop<()> = builder.build()?;
+    crate::app::quit_guard::install();
 
     run_with(launch_mode, app_bundle, event_loop, mod_switch)
 }
