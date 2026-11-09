@@ -6,9 +6,9 @@
 //! machine for no gameplay benefit. Holding the frame slot is what a 60 Hz
 //! display did in retail.
 //!
-//! Play is capped at 60 fps by default (`VERA_FPS_CAP` overrides it, `0`
-//! disables the cap). An unfocused window keeps the same default
-//! (`VERA_FPS_CAP_IDLE`), because the simulation advances with presentation.
+//! Focused play is capped at 60 fps by default (`VERA_FPS_CAP` overrides it, `0`
+//! disables the cap). An unfocused window drops to 15 fps
+//! (`VERA_FPS_CAP_IDLE`), because the player is not looking at it.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -34,7 +34,7 @@ fn cap_hz(focused: bool) -> Option<u32> {
         })
     } else {
         *UNFOCUSED.get_or_init(|| {
-            let cap = parse_cap(std::env::var("VERA_FPS_CAP_IDLE").ok().as_deref(), 60);
+            let cap = parse_cap(std::env::var("VERA_FPS_CAP_IDLE").ok().as_deref(), 15);
             match cap {
                 Some(hz) => log::info!("presentation cap (unfocused): {hz} fps"),
                 None => log::info!("presentation cap (unfocused): disabled"),
