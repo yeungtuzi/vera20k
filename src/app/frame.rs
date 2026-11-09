@@ -732,7 +732,17 @@ impl App {
         // advances it. Below the top speed, cap the display refresh.
         let (game_speed, _) =
             crate::app::match_runtime::sim_tick::local_pacing_inputs(state);
-        if shell_capture.is_none() && game_speed < 6 {
+        {
+            use std::sync::atomic::{AtomicI32, Ordering};
+            static LAST_SPEED: AtomicI32 = AtomicI32::new(-2);
+            if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame {
+                let speed = i32::from(game_speed);
+                if LAST_SPEED.swap(speed, Ordering::Relaxed) != speed {
+                    log::info!("game speed for presentation cap: {speed}");
+                }
+            }
+        }
+        if shell_capture.is_none() && game_speed < 5 {
             crate::app::present_cap::pace_frame(state.platform.window.has_focus());
         }
         // The glyph atlas empties or grows only between frames, while no
