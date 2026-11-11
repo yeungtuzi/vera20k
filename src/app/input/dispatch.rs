@@ -399,7 +399,6 @@ pub(crate) fn tactical_mouse(state: &mut AppState, button: MouseButton, btn_stat
                     state.match_state.input.queued_order_mode = OrderMode::Move;
                     return;
                 }
-                }
                 band_box_left_up(state, LeftUp::Tactical);
             }
         }
@@ -2405,7 +2404,7 @@ pub(crate) fn dispatch_command_bar(state: &mut AppState, command: usize, right: 
 
 // Native 653952 -> GameState1 -> 48C9BA/4F10E0 opens the pause menu.
 // The button and ordinary Options hotkey share this modal entry.
-fn open_pause_menu(state: &mut AppState) {
+pub(crate) fn open_pause_menu(state: &mut AppState) {
     // Two states have no tick left to consume the event below: a network
     // match that is waiting for the relay to resume, and a result that is
     // already published and waiting for the losing commander's clip (no frame

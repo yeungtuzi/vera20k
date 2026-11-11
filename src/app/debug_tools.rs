@@ -321,7 +321,7 @@ pub(crate) fn sync_session(state: &mut crate::app::AppState) {
         && state.match_state.scenario_exit.is_none()
         && state.match_state.scenario_outcome.is_none();
     let context = context(state.match_state.session_mode(), active);
-    if let Some(runtime) = state.match_state.sim_runtime.as_mut() {
+    if let Some(runtime) = state.match_state.sim_runtime.write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug) {
         runtime.simulation.set_debug_session_context(context);
     }
 }
@@ -341,7 +341,7 @@ pub(crate) fn trainer_row_at(point: (f32, f32), view_height: f32) -> Option<Trai
 /// Whether each row reads as lit. A switch is lit when it is on; a button is lit
 /// while the trainer can accept it at all.
 pub(crate) fn trainer_row_states(state: &crate::app::AppState) -> Vec<(TrainerRow, bool)> {
-    let Some(runtime) = state.match_state.sim_runtime.as_ref() else {
+    let Some(runtime) = state.match_state.sim_runtime.runtime() else {
         return TRAINER_ROWS.iter().map(|&row| (row, false)).collect();
     };
     let simulation = &runtime.simulation;
@@ -381,7 +381,7 @@ pub(crate) fn activate_trainer_row(
         let available = state
             .match_state
             .sim_runtime
-            .as_ref()
+            .runtime()
             .is_some_and(|runtime| runtime.simulation.trainer_available());
         if !available {
             return false;
@@ -390,7 +390,7 @@ pub(crate) fn activate_trainer_row(
         log::info!("Trainer: the next tactical click drops an MCV");
         return true;
     }
-    let Some(runtime) = state.match_state.sim_runtime.as_mut() else {
+    let Some(runtime) = state.match_state.sim_runtime.write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug) else {
         return false;
     };
     if !runtime.simulation.trainer_available() {

@@ -83,7 +83,7 @@ pub enum DebugToolsError {
     NoLocalHouse,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct DebugToolsState {
     context: DebugSessionContext,
     flags: CheatFlags,

@@ -733,7 +733,7 @@ pub(crate) fn apply_map_load_result(state: &mut AppState, result: init::MapLoadR
     // off, so "load a save" can never inherit invincibility or any other cheat
     // left on in the previous world.
     #[cfg(feature = "debug-tools")]
-    if let Some(runtime) = state.match_state.sim_runtime.as_mut() {
+    if let Some(runtime) = state.match_state.sim_runtime.write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug) {
         runtime.simulation.clear_debug_tools();
     }
 
