@@ -357,6 +357,15 @@ impl GpuContext {
         let required_surface_usages = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST;
+        // The GL/GLES backend (the preferred path on mobile-derived GPUs)
+        // exposes a render-attachment-only swapchain; the copy usages the
+        // stock-shell capture path asks for are not available there.  Relax
+        // the check for that backend instead of refusing to start.
+        let required_surface_usages = if adapter_info.backend == wgpu::Backend::Gl {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        } else {
+            required_surface_usages
+        };
         if !surface_caps.usages.contains(required_surface_usages) {
             bail!(
                 "exact stock-shell presentation requires surface usages \
