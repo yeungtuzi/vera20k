@@ -53,7 +53,7 @@ wasm-lan = ["wasm-net", "vera20k-core/wasm-lan"]
 wasm-threads = ["wasm", "vera20k-core/wasm-threads", "dep:wasm-bindgen-rayon"]
 # Development builds carry the Ctrl+Shift dev chord. The release workflow builds
 # with `--no-default-features`, so shipped binaries do not.
-default = ["dev-overlays"]
+default = ["dev-overlays", "mimalloc-alloc"]
 # Optional gameplay extensions. Neither default nor shipping builds enable this.
 ares = ["vera20k-core/ares"]
 # Optional Phobos extensions, independent of the Ares capability; neither
@@ -76,9 +76,8 @@ telemetry-dashboard = ["vera20k-core/telemetry", "dep:sha1"]
 # dashboard alone or the default/shipping feature set.
 debug-tools = ["dev-overlays", "vera20k-core/debug-tools"]
 
-# mimalloc replaces glibc malloc for the game binary; opt out with
-# --no-default-features when comparing allocators.
-default = ["mimalloc-alloc"]
+# mimalloc replaces glibc malloc for the game binary; drop it from `default`
+# when comparing allocators (`--no-default-features` also drops dev-overlays).
 mimalloc-alloc = ["dep:mimalloc"]
 
 [dependencies]
