@@ -412,8 +412,21 @@ impl App {
         // shell does (`WinMain` 006BD9B5, `RetailOptionsLoad`), however large
         // it was left; only its corner is kept.
         let placement = options_profile.window_placement.filter(|_| !capture);
+        // Launcher hook: VERA_WINDOW_SIZE=1920x1080 opens the player's window
+        // at that logical size, so a low-resolution render can be upscaled by
+        // the compositor (WINIT_X11_SCALE_FACTOR=1) instead of filling a
+        // HiDPI surface at 2x.  Capture runs keep their fixed surface.
+        let env_window = (!capture)
+            .then(|| std::env::var("VERA_WINDOW_SIZE").ok())
+            .flatten()
+            .and_then(|value| {
+                let (w, h) = value.split_once('x')?;
+                Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+            });
         let inner_size: winit::dpi::Size = if capture {
             PhysicalSize::new(window_width, window_height).into()
+        } else if let Some((width, height)) = env_window {
+            winit::dpi::LogicalSize::new(width.max(640), height.max(480)).into()
         } else {
             winit::dpi::LogicalSize::new(window_width, window_height).into()
         };
