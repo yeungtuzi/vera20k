@@ -15,7 +15,7 @@ static ADAPTER: Mutex<String> = Mutex::new(String::new());
 
 /// Per-second FPS log requested by `VERA_FPS_LOG=<seconds>` (0 = off).
 static LOG_PERIOD_MS: AtomicU64 = AtomicU64::new(0);
-static WINDOW_START: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
+static WINDOW_START: Mutex<Option<(Instant, u64, u128)>> = Mutex::new(None);
 
 /// Record one presented frame.
 pub(crate) fn note_frame() {
@@ -27,17 +27,22 @@ pub(crate) fn note_frame() {
     let now = Instant::now();
     let Ok(mut window) = WINDOW_START.lock() else { return };
     match *window {
-        None => *window = Some((now, FRAMES.load(Ordering::Relaxed))),
-        Some((start, start_frames)) => {
-            let elapsed = now.duration_since(start).as_millis() as u64;
+        None => *window = Some((now, FRAMES.load(Ordering::Relaxed), 0)),
+        Some((start, start_frames, worst_ms)) => {
+            let delta_ms = now.duration_since(start).as_millis();
+            let elapsed = delta_ms as u64;
+            // Longest gap between two presents in this window: a hitch shows
+            // up even when the average stays at the target rate.
+            let worst_ms = worst_ms.max(delta_ms);
             if elapsed >= period {
                 let frames = FRAMES.load(Ordering::Relaxed).saturating_sub(start_frames);
                 let fps = frames as f64 * 1000.0 / elapsed as f64;
                 log::info!(
-                    "FPS window: {frames} frames in {:.1} s = {fps:.1} fps",
-                    elapsed as f64 / 1000.0
+                    "FPS window: {frames} frames in {:.1} s = {fps:.1} fps, worst frame {:.1} ms",
+                    elapsed as f64 / 1000.0,
+                    worst_ms as f64
                 );
-                *window = Some((now, FRAMES.load(Ordering::Relaxed)));
+                *window = Some((now, FRAMES.load(Ordering::Relaxed), 0));
             }
         }
     }
