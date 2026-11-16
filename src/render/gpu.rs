@@ -380,7 +380,10 @@ impl GpuContext {
         let webgl = false;
         #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
         let webgl = adapter_info.backend == wgpu::Backend::Gl;
-        if !webgl && !downlevel.flags.contains(wgpu::DownlevelFlags::VIEW_FORMATS) {
+        if !webgl
+            && adapter_info.backend != wgpu::Backend::Gl
+            && !downlevel.flags.contains(wgpu::DownlevelFlags::VIEW_FORMATS)
+        {
             bail!(
                 "exact stock-shell presentation requires compatible sRGB/unorm \
                  texture views, adapter downlevel flags are {:?}",
