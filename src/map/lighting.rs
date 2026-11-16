@@ -390,7 +390,7 @@ pub struct CellLightGrid {
     /// Palette tint per (profile, scalar).  Every visible tile asked for its
     /// tint on every frame before this cache; the lookup itself is the same
     /// for all cells that share a profile and scalar.
-    tint_cache: std::sync::Mutex<std::collections::HashMap<(usize, i32), [f32; 3]>>,
+    tint_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(usize, i32), [f32; 3]>>>,
 }
 
 /// Native Cell+104/+108/+10A values in VERA's saved local view.
