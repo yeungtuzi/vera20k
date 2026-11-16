@@ -387,6 +387,10 @@ pub struct CellLightGrid {
     /// Detached user-load staging also carries the process ColorScheme normal
     /// cache. It is deliberately absent from the saved file's value history.
     restore_history: Option<LightRgbKey>,
+    /// Palette tint per (profile, scalar).  Every visible tile asked for its
+    /// tint on every frame before this cache; the lookup itself is the same
+    /// for all cells that share a profile and scalar.
+    tint_cache: std::sync::Mutex<std::collections::HashMap<(usize, i32), [f32; 3]>>,
 }
 
 /// Native Cell+104/+108/+10A values in VERA's saved local view.
@@ -406,6 +410,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_cache: Default::default(),
         }
     }
 
@@ -417,6 +422,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_cache: Default::default(),
         }
     }
 
@@ -427,6 +433,7 @@ impl CellLightGrid {
             detail_level: detail_level.min(2),
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_cache: Default::default(),
         }
     }
 
@@ -458,6 +465,7 @@ impl CellLightGrid {
     }
 
     pub fn take_saved_local_lighting(&mut self) -> Option<(SavedCellLighting, LightRgbKey)> {
+        self.clear_tint_cache();
         self.restore_history
             .take()
             .map(|normal| (self.saved_local_lighting(), normal))
@@ -470,6 +478,7 @@ impl CellLightGrid {
     /// cell. They differ only where a retained refresh (`0x00484680`) left a
     /// cell apart from a full relight, and only after loading a save.
     pub fn apply_saved_local_lighting(&mut self, saved: &SavedCellLighting) {
+        self.clear_tint_cache();
         for &(cell, scale16, additive, top) in &saved.cells {
             if let Some(light) = self.cells.get_mut(&cell) {
                 light.scale16 = scale16;
@@ -487,6 +496,7 @@ impl CellLightGrid {
     /// LightConvert556090 retains normal RGB/row identity while selecting
     /// Ion alternate table RGB; neither normalization nor Cell104 changes.
     pub fn set_alternate_rgb(&mut self, rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         for profile in self
             .profiles
             .profiles
@@ -503,6 +513,7 @@ impl CellLightGrid {
     /// Constructor context changes only future cache entries; it never
     /// rewrites an existing Convert's retained colors or selected mode.
     pub fn set_constructor_alternate_rgb(&mut self, rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         self.profiles.constructor_alternate_rgb = rgb.map(|rgb| rgb.map(|v| v.clamp(0, 2000)));
     }
 
@@ -515,6 +526,7 @@ impl CellLightGrid {
     /// selects normal mode. Preserve row counts and Cell104. Lookup544EF8
     /// compares the mutable normal cache, so rebuild that derived index.
     pub fn retint_normal_rgb(&mut self, rgb: LightRgbKey) {
+        self.clear_tint_cache();
         let rgb = rgb.map(|v| v.clamp(0, 2000));
         for profile in self
             .profiles
@@ -557,6 +569,7 @@ impl CellLightGrid {
     /// 685120 ->53AB50 ->53C280 selects its mode separately; no saved mode
     /// bit or loaded Scenario normal-RGB field overwrites this cache.
     pub fn restore_color_scheme_normal_rgb(&mut self, rgb: LightRgbKey) {
+        self.clear_tint_cache();
         self.scheme_profile.normal_rgb_key = rgb;
     }
 
@@ -565,6 +578,7 @@ impl CellLightGrid {
     /// schemes and Anim+FC survive; new Cell Converts use555DA0's current
     /// constructor profile rather than a prior global normal-cache retint.
     pub fn reset_cell_converts(&mut self, constructor_rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         self.profiles = LightProfileCache::new();
         self.set_constructor_alternate_rgb(constructor_rgb);
         if let Some(rgb) = self.profiles.constructor_alternate_rgb {
@@ -590,6 +604,7 @@ impl CellLightGrid {
     where
         I: IntoIterator<Item = ((u16, u16), u8)>,
     {
+        self.clear_tint_cache();
         for (cell, height) in heights {
             if let Some(light) = self.cells.get_mut(&cell) {
                 light.refresh_retained_scalars(profile, height);
@@ -598,11 +613,13 @@ impl CellLightGrid {
     }
 
     pub fn insert_light(&mut self, cell: (u16, u16), light: CellLight) {
+        self.clear_tint_cache();
         self.cells.insert(cell, light);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn insert_profiled_light(&mut self, cell: (u16, u16), rgb: [f32; 3], common_scalar: f32) {
+        self.clear_tint_cache();
         let profile_id = self.profiles.profile_id_for_rgb(rgb);
         let rgb_key = rgb_to_key(rgb);
         self.insert_light(
@@ -613,6 +630,7 @@ impl CellLightGrid {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_compat_tint(&mut self, cell: (u16, u16), tint: [f32; 3]) {
+        self.clear_tint_cache();
         self.insert_profiled_light(cell, tint, 1.0);
     }
 
@@ -734,13 +752,30 @@ impl CellLightGrid {
     }
 
     fn tint_for_profile_scalar(&self, profile_id: LightProfileId, scalar: i32) -> [f32; 3] {
+        let key = (profile_id.0, scalar);
+        if let Ok(cache) = self.tint_cache.lock()
+            && let Some(hit) = cache.get(&key)
+        {
+            return *hit;
+        }
         let profile = self
             .profiles
             .get(profile_id)
             .or_else(|| self.profiles.get(self.profiles.default_profile_id()))
             .expect("default light profile is always present");
-        let scalar = scalar as f32 / LIGHT_UNIT as f32;
-        key_to_rgb(profile.palette_rgb()).map(|channel| channel * scalar)
+        let scale = scalar as f32 / LIGHT_UNIT as f32;
+        let tint = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
+        if let Ok(mut cache) = self.tint_cache.lock() {
+            cache.insert(key, tint);
+        }
+        tint
+    }
+
+    /// Drop cached tints after any change to the profiles or their colours.
+    fn clear_tint_cache(&self) {
+        if let Ok(mut cache) = self.tint_cache.lock() {
+            cache.clear();
+        }
     }
 }
 
