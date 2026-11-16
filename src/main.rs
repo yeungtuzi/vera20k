@@ -19,7 +19,7 @@ use anyhow::Result;
 
 // AArch64 Linux builds use mimalloc: profiling showed a fifth of the frame's
 // CPU inside glibc malloc/free.  Other targets keep the system allocator.
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "mimalloc-alloc"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

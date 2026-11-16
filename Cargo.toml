@@ -76,6 +76,11 @@ telemetry-dashboard = ["vera20k-core/telemetry", "dep:sha1"]
 # dashboard alone or the default/shipping feature set.
 debug-tools = ["dev-overlays", "vera20k-core/debug-tools"]
 
+# mimalloc replaces glibc malloc for the game binary; opt out with
+# --no-default-features when comparing allocators.
+default = ["mimalloc-alloc"]
+mimalloc-alloc = ["dep:mimalloc"]
+
 [dependencies]
 # The GPU-free engine. Its dev features follow this package's.
 vera20k-core = { path = "src" }
@@ -180,7 +185,7 @@ wgpu = { version = "30.0.1", features = ["webgl"] }
 # The per-frame CPU budget on the ARM hosts is dominated by malloc traffic;
 # mimalloc keeps the game's short-lived instance vectors out of glibc's arena.
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
-mimalloc = "0.1"
+mimalloc = { version = "0.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Continuing presentation uptime across saved-game process restarts. The
