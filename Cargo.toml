@@ -302,3 +302,10 @@ incremental = true
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+# Native release: whole-crate LTO plus a single codegen unit.  The build is
+# slower, but this is a game loop on a 4-core ARM host where the per-frame
+# CPU budget matters more than compile time.
+[profile.release]
+lto = "thin"
+codegen-units = 1
