@@ -46,6 +46,9 @@ pub enum SingleInstance {
 pub struct InstanceGuard {
     #[cfg(windows)]
     handle: *mut core::ffi::c_void,
+    /// The unix gate is an exclusive `flock`; closing the file releases it.
+    #[cfg(unix)]
+    _lock: std::fs::File,
 }
 
 impl Drop for InstanceGuard {
@@ -133,10 +136,60 @@ pub fn acquire(window_title: &str) -> SingleInstance {
     SingleInstance::AlreadyRunning
 }
 
-/// Non-Windows hosts have no gate: the native mechanism is a Win32 named mutex
-/// and retail ships only for Windows. Development builds on other targets are
-/// deliberately ungated.
-#[cfg(not(windows))]
+/// Unix hosts take an exclusive `flock` in the runtime directory.
+///
+/// The native gate is a Win32 named mutex, but the reason it exists — two live
+/// copies both rewriting the whole `VERA.INI` profile on quit — applies to
+/// every host, and on Linux a second copy also splits the GPU budget with the
+/// first. The lock lives in `$XDG_RUNTIME_DIR` (falling back to the temp
+/// directory) so a reboot never leaves a stale gate behind.
+/// `VERA_ALLOW_MULTI_INSTANCE=1` opts out for automated runs.
+#[cfg(unix)]
+pub fn acquire(_window_title: &str) -> SingleInstance {
+    use std::os::fd::AsRawFd;
+
+    let dev_null = || std::fs::File::open("/dev/null");
+    if std::env::var_os("VERA_ALLOW_MULTI_INSTANCE").is_some() {
+        return match dev_null() {
+            Ok(lock) => SingleInstance::Acquired(InstanceGuard { _lock: lock }),
+            Err(_) => SingleInstance::AlreadyRunning,
+        };
+    }
+    let dir = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(runtime) => std::path::PathBuf::from(runtime).join("vera20k"),
+        None => std::env::temp_dir().join("vera20k"),
+    };
+    // An unwritable runtime directory must not stop the game from starting;
+    // native also proceeds when its mutex create fails for another reason.
+    let Ok(()) = std::fs::create_dir_all(&dir) else {
+        return match dev_null() {
+            Ok(lock) => SingleInstance::Acquired(InstanceGuard { _lock: lock }),
+            Err(_) => SingleInstance::AlreadyRunning,
+        };
+    };
+    let Ok(lock) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("instance.lock"))
+    else {
+        return match dev_null() {
+            Ok(lock) => SingleInstance::Acquired(InstanceGuard { _lock: lock }),
+            Err(_) => SingleInstance::AlreadyRunning,
+        };
+    };
+    // SAFETY: `lock` owns a valid descriptor for the duration of the call and
+    // LOCK_EX|LOCK_NB never blocks.
+    let claimed = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if claimed {
+        SingleInstance::Acquired(InstanceGuard { _lock: lock })
+    } else {
+        SingleInstance::AlreadyRunning
+    }
+}
+
+/// Hosts with neither the Win32 mutex nor `flock` stay ungated.
+#[cfg(not(any(windows, unix)))]
 pub fn acquire(_window_title: &str) -> SingleInstance {
     SingleInstance::Acquired(InstanceGuard {})
 }
