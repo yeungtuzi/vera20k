@@ -15,9 +15,11 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 thread_local! {
-    /// Last presentation instant for this thread; the render callback runs on the
-    /// event-loop thread only.
-    static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    /// Next slot on the presentation grid for this thread; the render callback
+    /// runs on the event-loop thread only.  Keeping a fixed grid (instead of
+    /// "slot after the last frame") makes every interval the same length, so
+    /// frames do not alternate long/short and the picture does not judder.
+    static NEXT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
 }
 
 /// Frames per second granted to presentation; `None` means uncapped.
@@ -66,16 +68,20 @@ pub(crate) fn pace_frame(focused: bool) {
         return;
     };
     let slot = Duration::from_secs_f64(1.0 / f64::from(hz));
-    if let Some(last) = LAST.with(std::cell::Cell::get) {
-        let deadline = last + slot;
-        let now = Instant::now();
-        if now < deadline {
-            std::thread::sleep(deadline - now);
-        }
+    let now = Instant::now();
+    let mut next = NEXT.with(std::cell::Cell::get).unwrap_or(now);
+    if next <= now {
+        // A late frame skips to the following grid slot instead of building
+        // debt: never busy-loop to catch up.
+        let late = now.duration_since(next).as_nanos();
+        let slots = (late / slot.as_nanos()) as u32 + 1;
+        next += slot * slots;
     }
-    // The slot starts after the sleep, not before it: setting this first made
-    // frames alternate short/long and overshoot the cap by ~50%.
-    LAST.with(|cell| cell.set(Some(Instant::now())));
+    let wait = next.duration_since(now);
+    if wait > Duration::ZERO {
+        std::thread::sleep(wait);
+    }
+    NEXT.with(|cell| cell.set(Some(next + slot)));
 }
 
 #[cfg(test)]

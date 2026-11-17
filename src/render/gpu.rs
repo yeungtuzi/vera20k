@@ -434,7 +434,9 @@ impl GpuContext {
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            // One queued frame instead of two: the same cap still holds, with
+            // one refresh less input-to-photon delay.
+            desired_maximum_frame_latency: 1,
             // wgpu 30 selects an HDR colour space per surface format; Auto keeps
             // the pre-30 sRGB behaviour for every desktop and WebGL2 backend.
             color_space: wgpu::SurfaceColorSpace::Auto,

@@ -15,7 +15,18 @@ static ADAPTER: Mutex<String> = Mutex::new(String::new());
 
 /// Per-second FPS log requested by `VERA_FPS_LOG=<seconds>` (0 = off).
 static LOG_PERIOD_MS: AtomicU64 = AtomicU64::new(0);
-static WINDOW_START: Mutex<Option<(Instant, u64, Instant, u128)>> = Mutex::new(None);
+/// One logging window: frames, the longest gap, and the gap distribution.
+struct Window {
+    start: Instant,
+    start_frames: u64,
+    last: Instant,
+    worst_ms: u128,
+    gaps: u64,
+    gap_sum_ms: f64,
+    gap_sumsq_ms: f64,
+}
+
+static WINDOW_START: Mutex<Option<Window>> = Mutex::new(None);
 
 /// Record one presented frame.
 pub(crate) fn note_frame() {
@@ -25,29 +36,54 @@ pub(crate) fn note_frame() {
         return;
     }
     let now = Instant::now();
-    let Ok(mut window) = WINDOW_START.lock() else { return };
-    match *window {
-        None => *window = Some((now, FRAMES.load(Ordering::Relaxed), now, 0)),
-        Some((start, start_frames, last, worst_ms)) => {
-            // Gap since the previous present: a hitch shows up even when the
-            // window average stays at the target rate.
-            let gap_ms = now.duration_since(last).as_millis();
-            let worst_ms = worst_ms.max(gap_ms);
-            let elapsed = now.duration_since(start).as_millis() as u64;
-            if elapsed >= period {
-                let frames = FRAMES.load(Ordering::Relaxed).saturating_sub(start_frames);
-                let fps = frames as f64 * 1000.0 / elapsed as f64;
-                log::info!(
-                    "FPS window: {frames} frames in {:.1} s = {fps:.1} fps, worst frame {:.1} ms",
-                    elapsed as f64 / 1000.0,
-                    worst_ms as f64
-                );
-                *window = Some((now, FRAMES.load(Ordering::Relaxed), now, 0));
-            } else {
-                *window = Some((start, start_frames, now, worst_ms));
-            }
-        }
+    let Ok(mut guard) = WINDOW_START.lock() else { return };
+    if guard.is_none() {
+        *guard = Some(Window {
+            start: now,
+            start_frames: FRAMES.load(Ordering::Relaxed),
+            last: now,
+            worst_ms: 0,
+            gaps: 0,
+            gap_sum_ms: 0.0,
+            gap_sumsq_ms: 0.0,
+        });
+        return;
     }
+    let window = guard.as_mut().expect("window initialised above");
+    // Gap since the previous present: a hitch shows up even when the window
+    // average stays at the target rate.  The mean/σ of the gaps is the judder
+    // the eye sees when the average is already on target.
+    let gap_ms = now.duration_since(window.last).as_secs_f64() * 1000.0;
+    window.gaps += 1;
+    window.gap_sum_ms += gap_ms;
+    window.gap_sumsq_ms += gap_ms * gap_ms;
+    window.worst_ms = window.worst_ms.max(gap_ms as u128);
+    window.last = now;
+    let elapsed = now.duration_since(window.start).as_millis() as u64;
+    if elapsed < period {
+        return;
+    }
+    let frames = FRAMES.load(Ordering::Relaxed).saturating_sub(window.start_frames);
+    let fps = frames as f64 * 1000.0 / elapsed as f64;
+    let n = window.gaps.max(1) as f64;
+    let mean = window.gap_sum_ms / n;
+    let variance = (window.gap_sumsq_ms / n - mean * mean).max(0.0);
+    log::info!(
+        "FPS window: {frames} frames in {:.1} s = {fps:.1} fps, worst frame {:.1} ms, \
+         mean gap {mean:.1} ms, jitter {:.1} ms",
+        elapsed as f64 / 1000.0,
+        window.worst_ms as f64,
+        variance.sqrt()
+    );
+    *guard = Some(Window {
+        start: now,
+        start_frames: FRAMES.load(Ordering::Relaxed),
+        last: now,
+        worst_ms: 0,
+        gaps: 0,
+        gap_sum_ms: 0.0,
+        gap_sumsq_ms: 0.0,
+    });
 }
 
 /// `VERA_FPS_LOG=<milliseconds>`: log a rolling FPS line that often.
