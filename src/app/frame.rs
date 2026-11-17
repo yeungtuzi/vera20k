@@ -792,7 +792,7 @@ fn scale_cursor(
                 return Some(cursor.clone());
             }
             let (rgba, width, height, hot_x, hot_y) =
-                scale_cursor(frame.rgba.as_slice(), frame.width, frame.height, hotspot, scale);
+                Self::scale_cursor(frame.rgba.as_slice(), frame.width, frame.height, hotspot, scale);
             let source =
                 winit::window::CustomCursor::from_rgba(rgba, width, height, hot_x, hot_y).ok()?;
             let cursor = event_loop.create_custom_cursor(source);
