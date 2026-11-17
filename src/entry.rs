@@ -172,6 +172,10 @@ fn run_with(
         crate::i18n::init(None, None);
     }
 
+    // Rolling per-second frame statistics for the launcher (`VERA_FPS_LOG`).
+    crate::app::diagnostics::frame_stats::configure_from_env();
+    let frame_stats_start = crate::util::time::Instant::now();
+
     // Callers supplying their own loop share the same exit output. Desktop
     // startup handles this before creating its event loop.
     if let AppLaunchMode::Exit(exit) = launch_mode {
@@ -263,6 +267,10 @@ fn run_with(
     let spawn_status = app.finish_spawn_launch();
     app.finish_capture()?;
 
+    log::info!(
+        "Performance summary: {}",
+        crate::app::diagnostics::frame_stats::summary(frame_stats_start)
+    );
     log::info!("VERA20k shut down cleanly");
     Ok(spawn_status.unwrap_or(0))
 }

@@ -832,6 +832,7 @@ impl App {
         mut hidden_run: Option<&mut crate::app::hidden_run::HiddenRun>,
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
+        crate::app::diagnostics::frame_stats::note_frame();
         // Publish the player's colour-vision matrix before any early-return
         // present and before synchronous loading repaints: all of them encode
         // through the shared filter on GpuContext, not just the frame's tail.

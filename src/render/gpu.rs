@@ -306,6 +306,7 @@ impl GpuContext {
             adapter_info.name,
             adapter_info.backend
         );
+        crate::app::diagnostics::frame_stats::set_adapter(&adapter_info.name);
 
         // Atlas sizing is bounded by whatever limits we *request*, not by the hardware.
         let adapter_limits = adapter.limits();
