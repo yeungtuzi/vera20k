@@ -668,6 +668,14 @@ impl App {
     /// active (see `PlatformState::owns_pointer`); and elsewhere only
     /// without mouse.sha, which the shell pages draw whenever it loaded.
     fn show_os_cursor_only_without_game_cursor(state: &mut AppState, battlefield_drawn: bool) {
+        // Hardware-cursor mode: the compositor owns the pointer, so the OS
+        // cursor stays visible everywhere and no software cursor is drawn.
+        if std::env::var_os("VERA_HW_CURSOR").is_some() {
+            if state.platform.owns_pointer() || battlefield_drawn {
+                crate::app::input::cursor::set_os_cursor_visible(state, true);
+            }
+            return;
+        }
         let status_screen_drawn = std::mem::take(&mut state.frontend.status_screen_drawn);
         let visible = !state.platform.owns_pointer()
             || if state.platform.cursor_confined {
