@@ -52,7 +52,7 @@ fn parse_cap(raw: Option<&str>, default: u32) -> Option<u32> {
 /// A late frame resets the slot instead of accumulating debt, so a slow render
 /// never busy-loops to catch up.
 pub(crate) fn pace_frame() {
-    let Some(hz) = cap_hz(focused) else {
+    let Some(hz) = cap_hz() else {
         return;
     };
     let slot = Duration::from_secs_f64(1.0 / f64::from(hz));
