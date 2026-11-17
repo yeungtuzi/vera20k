@@ -92,6 +92,10 @@ pub fn adopt_android_data_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// When the process started counting frames, for the shutdown summary.
+static FRAME_STATS_START: std::sync::OnceLock<crate::util::time::Instant> =
+    std::sync::OnceLock::new();
+
 /// Desktop start-up: parse the process arguments, then drive a fresh event loop.
 ///
 /// Returns the process exit status: 0, or a `-SPAWN` launch's result status.
@@ -128,7 +132,7 @@ fn run_with_args(app_bundle: bool, args: impl IntoIterator<Item = OsString>) -> 
 
     // Rolling per-frame statistics for the launcher (`VERA_FPS_LOG`).
     crate::app::diagnostics::frame_stats::configure_from_env();
-    let frame_stats_start = crate::util::time::Instant::now();
+    let _ = FRAME_STATS_START.get_or_init(crate::util::time::Instant::now);
 
     // Create the OS event loop. This drives the entire application:
     // window events, input, redraws, lifecycle events.
@@ -283,7 +287,9 @@ fn run_with(
 
     log::info!(
         "{}",
-        crate::app::diagnostics::frame_stats::summary(frame_stats_start)
+        crate::app::diagnostics::frame_stats::summary(
+            *FRAME_STATS_START.get().unwrap_or(&crate::util::time::Instant::now())
+        )
     );
     log::info!("VERA20k shut down cleanly");
     Ok(spawn_status.unwrap_or(0))

@@ -841,9 +841,11 @@ impl App {
         use std::collections::HashMap;
 
         thread_local! {
-            static CACHE: RefCell<HashMap<(u32, usize, u32), winit::window::CustomCursor>> =
-                RefCell::new(HashMap::new());
-            static SHOWN: Cell<Option<(u32, usize, u32)>> = const { Cell::new(None) };
+            static CACHE: RefCell<
+                HashMap<(crate::render::cursor_atlas::CursorId, usize, u32), winit::window::CustomCursor>,
+            > = RefCell::new(HashMap::new());
+            static SHOWN: Cell<Option<(crate::render::cursor_atlas::CursorId, usize, u32)>> =
+                const { Cell::new(None) };
             static LOGGED: Cell<bool> = const { Cell::new(false) };
         }
 
@@ -873,7 +875,7 @@ impl App {
             })
             .unwrap_or(1.0)
             .clamp(1.0, 4.0);
-        let key = (id as u32, index, (scale * 100.0).round() as u32);
+        let key = (id, index, (scale * 100.0).round() as u32);
         if SHOWN.with(|shown| shown.get()) == Some(key) {
             return;
         }
