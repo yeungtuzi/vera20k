@@ -77,9 +77,8 @@ wasm-threads = ["wasm", "vera20k-core/wasm-threads", "dep:wasm-bindgen-rayon", "
 # with `--no-default-features`, so shipped binaries do not.
 default = ["dev-overlays", "mimalloc-alloc"]
 # Optional gameplay extensions. Neither default nor shipping builds enable this.
-ares = ["vera20k-core/ares"]
-# Optional Phobos extensions, independent of the Ares capability; neither
-# default nor shipping builds enable this either.
+# Ares needs no feature: it switches on from a game's data in every build.
+# Optional Phobos extensions; neither default nor shipping builds enable this.
 phobos = ["vera20k-core/phobos"]
 # Placeholder for the NPatch capability; no chain reads it yet.
 npatch = ["vera20k-core/npatch"]
@@ -241,10 +240,6 @@ winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSButton", "NSControl", "NSCursor", "NSEvent", "NSImage", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow", "block2"] }
-<<<<<<< HEAD
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSLocale", "NSString", "NSURL"] }
-block2 = "0.6"
-=======
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSGeometry", "NSLocale", "NSString", "NSURL", "objc2-core-foundation"] }
 block2 = "0.6"
 
@@ -259,7 +254,6 @@ arboard = { version = "3.7", default-features = false }
 
 # --- Windows memory allocator ---
 # The game program (src/main.rs) allocates through mimalloc on Windows instead
->>>>>>> launcher/0.3.6
 
 # --- Windows program icon and version details ---
 # build.rs compiles them into vera20k.exe with the Windows SDK's resource
@@ -360,14 +354,13 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 
-<<<<<<< HEAD
 # Native release: whole-crate LTO plus a single codegen unit.  The build is
 # slower, but this is a game loop on a 4-core ARM host where the per-frame
 # CPU budget matters more than compile time.
 [profile.release]
 lto = "thin"
 codegen-units = 1
-=======
+
 # The browser package (tools/wasm/build.py's default), which every player
 # downloads: optimized for size across every crate as one unit, without the
 # function names only a debugger reads. Optimization levels keep simulation
@@ -382,4 +375,3 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
->>>>>>> launcher/0.3.6

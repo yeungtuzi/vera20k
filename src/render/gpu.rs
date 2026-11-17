@@ -1015,14 +1015,3 @@ mod tests {
     }
 }
 
-/// Presentation mode for a vertical-sync choice.
-///
-/// VSync off keeps one queued frame instead of two: the picture can tear, but
-/// the pointer and the simulation answer in the same frame the player sees.
-fn present_settings(vsync: bool) -> (wgpu::PresentMode, u32) {
-    if vsync {
-        (wgpu::PresentMode::Fifo, 1)
-    } else {
-        (wgpu::PresentMode::AutoNoVsync, 1)
-    }
-}
