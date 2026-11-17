@@ -417,6 +417,11 @@ impl GpuContext {
                 downlevel.flags
             );
         }
+        // `VERA_VSYNC=0` presents without waiting for vblank: the lowest
+        // latency the compositor path allows, at the cost of possible
+        // tearing.  On by default, matching the retail Options page.
+        let vsync = std::env::var("VERA_VSYNC").map_or(true, |value| value != "0");
+        let (present_mode, desired_maximum_frame_latency) = present_settings(vsync);
         let surface_format: wgpu::TextureFormat = surface_caps
             .formats
             .iter()
@@ -431,12 +436,12 @@ impl GpuContext {
             format: surface_format,
             width: window_size.width.max(1), // wgpu panics on 0-sized surfaces
             height: window_size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             // One queued frame instead of two: the same cap still holds, with
             // one refresh less input-to-photon delay.
-            desired_maximum_frame_latency: 1,
+            desired_maximum_frame_latency,
             // wgpu 30 selects an HDR colour space per surface format; Auto keeps
             // the pre-30 sRGB behaviour for every desktop and WebGL2 backend.
             color_space: wgpu::SurfaceColorSpace::Auto,
@@ -879,5 +884,17 @@ mod tests {
             Poll::Pending
         }));
         assert_eq!(output, 7);
+    }
+}
+
+/// Presentation mode for a vertical-sync choice.
+///
+/// VSync off keeps one queued frame instead of two: the picture can tear, but
+/// the pointer and the simulation answer in the same frame the player sees.
+fn present_settings(vsync: bool) -> (wgpu::PresentMode, u32) {
+    if vsync {
+        (wgpu::PresentMode::Fifo, 1)
+    } else {
+        (wgpu::PresentMode::AutoNoVsync, 1)
     }
 }
