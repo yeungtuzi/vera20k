@@ -502,6 +502,10 @@ impl GpuContext {
         // Configure the surface with our chosen format and the window's current size.
         let window_size: winit::dpi::PhysicalSize<u32> = window.inner_size();
         let (present_mode, desired_maximum_frame_latency) = present_settings(true);
+        log::info!(
+            "present mode: {:?}, queued frames: {desired_maximum_frame_latency}",
+            present_mode
+        );
         let config: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {
             usage: required_surface_usages,
             format: surface_format,

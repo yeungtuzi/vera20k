@@ -121,6 +121,23 @@ fn run_with_args(app_bundle: bool, args: impl IntoIterator<Item = OsString>) -> 
     // gamemd's 1 ms Windows timer period, until the event loop returns.
     let _wall_clock_period = crate::app::match_runtime::frame_pacer::WallClockPeriod::hold();
 
+    // Launcher token: a Linux player starts the game through reunion-lite,
+    // which owns the run directory and the settings the match needs. A direct
+    // start would write into the same profile from a second window.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("REUNION_LITE_LAUNCH").is_none()
+        && std::env::var_os("VERA_ALLOW_DIRECT_LAUNCH").is_none()
+    {
+        eprintln!(
+            "VERA20k is started by reunion-lite; set VERA_ALLOW_DIRECT_LAUNCH=1 to run it directly."
+        );
+        return Ok(1);
+    }
+
+    // Rolling per-frame statistics for the launcher (`VERA_FPS_LOG`).
+    crate::app::diagnostics::frame_stats::configure_from_env();
+    let frame_stats_start = crate::util::time::Instant::now();
+
     // Create the OS event loop. This drives the entire application:
     // window events, input, redraws, lifecycle events.
     let mut builder = EventLoop::builder();
@@ -272,6 +289,10 @@ fn run_with(
     let spawn_status = app.finish_spawn_launch();
     app.finish_capture()?;
 
+    log::info!(
+        "{}",
+        crate::app::diagnostics::frame_stats::summary(frame_stats_start)
+    );
     log::info!("VERA20k shut down cleanly");
     Ok(spawn_status.unwrap_or(0))
 }

@@ -459,8 +459,21 @@ impl App {
         // was left, as gamemd's shell does (`WinMain` 006BD9B5,
         // `RetailOptionsLoad`); VERA opens it at 1024x768 where gamemd's shell
         // is 800x600 (`player_launch_window_size`).
+        // Launcher hook: VERA_WINDOW_SIZE=1920x1080 opens the player's window
+        // at that logical size, so a low-resolution render can be upscaled by
+        // the compositor (WINIT_X11_SCALE_FACTOR=1) instead of filling a
+        // HiDPI surface at 2x. Capture runs keep their fixed surface.
+        let env_window = (!capture)
+            .then(|| std::env::var("VERA_WINDOW_SIZE").ok())
+            .flatten()
+            .and_then(|value| {
+                let (w, h) = value.split_once('x')?;
+                Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+            });
         let inner_size: winit::dpi::Size = if capture {
             PhysicalSize::new(window_width, window_height).into()
+        } else if let Some((width, height)) = env_window {
+            winit::dpi::LogicalSize::new(width.max(640), height.max(480)).into()
         } else {
             winit::dpi::LogicalSize::new(window_width, window_height).into()
         };
@@ -669,11 +682,15 @@ impl App {
         terrain_draw_renderer.generate_ion_blast_frames(&gpu.device, &gpu.queue);
         terrain_draw_renderer.set_gpu_timer(gpu.timer.clone());
         let combat_light_renderer = crate::render::combat_light::CombatLightRenderer::new(&gpu);
-        let performance_overlay =
+        let mut performance_overlay =
             crate::app::diagnostics::performance_overlay::PerformanceOverlay::new(
                 &gpu,
                 &batch_renderer,
             );
+        // Launcher hook: open with the performance readout already on screen.
+        if std::env::var_os("VERA_FPS_COUNTER").is_some() {
+            performance_overlay.set_visible(true);
+        }
         let window_ui =
             crate::app::presentation::window_ui::WindowUi::new(&gpu.device, &batch_renderer);
         let depth_view: wgpu::TextureView = gpu.create_depth_texture();
