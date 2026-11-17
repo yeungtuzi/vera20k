@@ -838,6 +838,10 @@ impl App {
         mut hidden_run: Option<&mut crate::app::hidden_run::HiddenRun>,
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
+        if crate::app::quit_guard::take_trainer_toggle_request() {
+            state.match_state.trainer_visible = !state.match_state.trainer_visible;
+            state.platform.window.request_redraw();
+        }
         // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
         // request here, never a process exit.
         if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
