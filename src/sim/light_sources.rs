@@ -333,7 +333,18 @@ impl Simulation {
         } else {
             ScenarioLightingProfile::Normal
         };
-        self.session.lighting_mut().select(profile);
+        // Ares hook 53C280 (10037B50): the raging storm's type
+        // (CurrentLightningStorm) and the active Dominator's (CurrentPsyDom)
+        // answer their Light.*; CurrentNukeType is kept only for the flash's
+        // own ChangeLighting.
+        // No Ares storm or Dominator is current in a game without Ares, so
+        // there the stock profile is selected alone.
+        let light = match profile {
+            ScenarioLightingProfile::Ion => self.lightning_storm.ares_light(),
+            ScenarioLightingProfile::Dominator => self.psychic_dominator.ares_light(),
+            _ => None,
+        };
+        self.session.lighting_mut().select_ares(profile, light);
         self.publish_global_lighting(PaletteUpdate::from_scenario(&self.session.lighting()));
     }
 

@@ -17,9 +17,10 @@
 
 use anyhow::Result;
 
-// AArch64 Linux builds use mimalloc: profiling showed a fifth of the frame's
-// CPU inside glibc malloc/free.  Other targets keep the system allocator.
-#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "mimalloc-alloc"))]
+// On Windows the game allocates through mimalloc instead of the process heap
+// (Cargo.toml, "Windows memory allocator"). Only this program: the tools and
+// the tests keep the system allocator.
+#[cfg(windows)]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

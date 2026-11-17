@@ -53,8 +53,10 @@ Each player gets eight handshakes/second, admitted or not, enough for paired
 old/new routes during renewal; Leave acknowledgements, which need no admission,
 share that budget. Leave for a room the relay no longer holds also has a
 relay-wide 512/second. Only permitted handshakes count toward the relay's
-512/second. Relay-wide input of 16,384 datagrams/second, and ordering output of
-as many packets, count only datagrams that authenticate and pass their sender's
+8,192/second, room for the lobby's 256 sessions and an hour's 512 new guests each
+at their own rate. A Pull that reads the journal spends its sender's own
+256/second before it reads. Relay-wide input of 16,384 datagrams/second, and
+ordering output of as many packets, count only datagrams that authenticate and pass their sender's
 own limits, including the replay window and the 2,048 packet/second principal
 cap, so forged, junk or replayed traffic cannot spend capacity other players
 need. Rejecting one costs at most three HMACs. These packet caps are joined by
@@ -182,7 +184,8 @@ end. ACK, `[2][accepted through varint][frame varint]`, and Status,
 u32][tick Hz u16][start delay ms varint][started]`, both end in the relay's
 window for the hop and the delay since its newest datagram, `[up_high
 varint][up_bits u64][echo delay ms varint]`: the client
-measures its RTT and uplink loss from them. Each side judges its own sends
+measures its RTT and uplink loss from them. A player's Status then names the
+silent players, if any (Silence, below). Each side judges its own sends
 three behind the newest feedback, once per feedback: a missing send counts as
 lost only if it went srtt + 4 rttvar before the feedback arrived (the relay
 uses the reader's reported srtt and rttvar, 100 / 50 ms before a report), and
@@ -310,7 +313,8 @@ coordinator as they arrive, as link kind 3, `[count]` then per report
 `[source][LE sample frame u32][LE checksum u32]`; only the coordinator compares
 them, and its desync travels as a contribution of source 255 (batch ID
 `u64::MAX - 1`, the record's 14 bytes after its frame) for the frame after its
-seal, which every relay emits after that frame's end. Link packets go to the roster
+seal, which every relay emits after that frame's end. Every relay also tells
+every other when it last heard its players (link kind 4, Silence below). Link packets go to the roster
 address on the relay's existing UDP port and are authenticated by their MAC,
 whatever address they arrive from. Deploy every relay of a federation at
 once: a relay rejects link entries newer than its own code, and one rejected
@@ -327,7 +331,9 @@ journals therefore advertise oldest sequence1 throughout the match.
 A short outage never removes a player. Healthy players continue; the returning
 player can replay from its old cursor even after every short hop ticket expired.
 Any authenticated packet, keepalives included, keeps a source's place. A started
-source silent for 10 minutes departs through the stream. Before the start, a
+source silent for 10 minutes departs through the stream (`ABSENT_MS`; a game
+that hears nothing from its relay for that long releases its route, which ends
+a match of two or more players). Before the start, a
 source that never sent Ready departs in frame 1 after 60 seconds of silence,
 counted from its last packet even before the room existed, or once the room is 3
 minutes old, and the others start without it; a Ready source waits. A federated
@@ -354,9 +360,9 @@ that cleanup, longer than any of its certificates lasts, a cleaned-up match
 answers Ready with `Inactive`, so a player returning later cannot start a new
 timeline under its ID; the marker lives in memory and a relay restart drops it. No reader
 acknowledgement gates advancement or retention.
-The service checks deadlines every6ms even when no packets arrive. Its pass over
-every room starts a millisecond after the previous one ended, plus once after
-each datagram it accepts, so rejected traffic, junk included, adds no pass.
+The service checks deadlines every 6 ms even when no packets arrive. Its pass
+over every room starts a millisecond after the previous one ended, so no
+datagram, accepted or junk, adds a pass.
 
 Explicit Leave is retried on the original socket until a terminal acknowledgement
 echoes that exact signed request. After a Leave, or once its ticket expired, a
@@ -410,3 +416,69 @@ quota and blocks no match. The relay never deletes these files; preserve them
 for diagnosis and remove them by hand. The
 in-memory `RelayServer::new` constructor remains useful for short protocol
 fixtures; deployed ordering uses `RelayServer::with_journal`.
+
+## Silence
+
+The relay plays on without a silent player where gamemd would hold the match in
+its wait dialog, so it tells the others who is silent and the game names them.
+Once the match has started, an active source the relay has heard nothing from
+for 10 seconds (`SILENT_NOTICE_MS`; any authenticated packet counts, as for
+`ABSENT_MS`) is silent until it is heard again. While any source is silent, a
+player's Status ends, after the hop feedback, in `[silent sources u32]`; while
+none is, it ends at the feedback, so a match whose players all keep in touch
+sends no extra byte. Clients from v0.2.4 ignore it, as any appended field. A
+field added after it later must come with `[silent sources u32]` always
+written, or a reader cannot tell the two apart.
+
+A relay hears only the players it homes. In a federated match every relay tells
+every other when it last heard each of its active players, every 500 ms, as link
+kind 4: `[count]` then per source `[source][LE age ms u32]`. A relay names
+another relay's players only once that relay has sent such a report. An older
+relay rejects the kind as malformed, which touches nothing else, and never sends
+it, so its players are never named. Once a relay stops reporting, its link
+down, its players count as silent from the time of its last report.
+
+## Watchers
+
+A watcher follows a started match from its first record, some time behind its
+players, and is no part of it: it has no source, counts for no start, pace,
+checksum or departure, and leaves nothing in the stream, so the players' games
+never learn it is there. Its code is in `../relay-protocol/src/sequenced/watch.rs`.
+
+Its hop holds a version 3 watch ticket of a player ticket's length:
+`[3][match UUID16][0][expiry LEu64][nonce16][watcher UUID16][delay seconds LEu64]`
+then HMAC-SHA256 under the relay ticket key over those 66 bytes with domain
+`VERA20k relay watch ticket v1\0`. Its packet key is derived from the whole
+ticket as a player's is. The delay is at most 240 seconds, below the 300 seconds
+a finished match's records stay, so a watcher that kept up still reads the end.
+A relay from before watchers refuses any ticket version but 2.
+
+HELLO and CONFIRM go as a player's, but a CONFIRM carries only the cookie (no
+federation roster) and spends the players' handshake budgets. The relay admits
+a watcher only to a match that started and whose whole stream is in its journal,
+and at most 10 watchers a match and 1,024 in all (`Full`). A CONFIRM with the
+same watcher and a later expiry renews the hop: a new session that keeps the old
+hop's agreement and budgets, and the old session goes at once. A watcher sends
+only PING, which READY answers, and CONTROL requests: Ready `[0][agreement32]`,
+the startup agreement, which must equal the players' (`AgreementMismatch`
+otherwise) and is answered with STATUS; Pull `[2][next varint]`, refused before
+an agreed Ready (`NotConfigured`), answered with STATUS and at most 4 PACKs (1,020
+records) from `next`; and Leave `[3]`, answered with LEAVE_ACK echoing its
+sequence, which frees the hop at once and writes nothing. Anything else, UPLINK,
+batches, DATA and Pause included, is refused. A watcher whose ticket expires,
+who is silent for 30 seconds, or whose match the relay no longer holds loses its
+hop.
+
+The delay holds in every reply. Once a second the room notes its stream's end
+(frame, next record, active sources), keeping 242 such marks; a watcher reads
+the newest mark at least its delay old, and before the first one nothing. A
+watcher's STATUS is a player's STATUS of that delayed end with the hop feedback
+and no silent players, then, when there is one, `[frame varint][checksum u32]`: the newest frame at or
+before that end, one in every 240 (16 checksum intervals), whose checksum every
+active player reported alike. The relay keeps the last 128 such samples. A
+watcher compares its own world's checksum at that frame and stops if they differ.
+
+Watchers spend budgets of their own, never the players': each watcher 64 packets,
+32 journal pulls and 256 KiB out a second, all watchers together 4,096 packets,
+512 journal pulls and 8 MiB a second. A Pull that reads the journal pays before
+it reads.

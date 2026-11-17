@@ -35,12 +35,12 @@ mod runtime;
 mod speed;
 mod state;
 
-#[cfg(all(test, feature = "ares"))]
+#[cfg(test)]
 pub(crate) use pickup::multiplayer_eligible_slot;
-#[cfg(all(test, feature = "ares"))]
+#[cfg(test)]
 pub(crate) use speed::apply_speed_crate;
 
-#[cfg(all(test, feature = "ares"))]
+#[cfg(test)]
 pub(crate) use effects::{Multiplier, apply_multiplier_crate};
 
 pub(crate) use effects::CrateMultipliers;
@@ -682,7 +682,7 @@ fn snap_to_passable(
     )
 }
 
-#[cfg(test)]
+#[cfg(test)] // shared by test groups
 pub(crate) mod tests {
     use super::*;
 
@@ -2594,6 +2594,48 @@ pub(crate) mod tests {
         assert_eq!(dummy.overlay_fields(), (Some(0x60), 0));
         assert_eq!(dummy.snapshot().coord, (-1, 2));
         assert_eq!(sim.scenario_rng.state(), before);
+    }
+
+    /// `OverlayClass::Mark` (`0x005FC570`) ends in its Recalc (`0x005FD200`),
+    /// whose CliffBack test reads cell (0, 1)'s missing neighbours (-1, 1)
+    /// and (-1, 2). An ordinary Overlay whose projection waits for its batch
+    /// makes those reads inside Mark all the same, and the batch makes none.
+    #[test]
+    fn a_deferred_ordinary_recalc_keeps_its_neighbour_reads_inside_mark() {
+        let registry = OverlayTypeRegistry::from_ini(
+            &IniFile::from_str("[General]\nCliffBackImpassability=2\n[OverlayTypes]\n0=PLAIN\n"),
+            None,
+        );
+        let marked = |recalc: OverlayRecalc| {
+            let mut sim = sim_with_grid(0x14090013);
+            assert_eq!(
+                super::construct_runtime_overlay(
+                    &mut sim,
+                    &CrateRules::default(),
+                    crate::rules::ruleset::RuleSet::empty_for_test(),
+                    &registry,
+                    (0, 1),
+                    0,
+                    recalc,
+                    FrameEffects::default(),
+                )
+                .expect("a plain Overlay marks"),
+                AcceptedCellResult::Visible
+            );
+            sim
+        };
+        let dummy = |sim: &Simulation| sim.effective_shared_cell_dummy().snapshot().coord;
+        assert_eq!(dummy(&marked(OverlayRecalc::Immediate)), (-1, 2));
+        let mut deferred = marked(OverlayRecalc::DeferOrdinary);
+        assert_eq!(dummy(&deferred), (-1, 2));
+
+        deferred.effective_shared_cell_dummy().stamp_coord(7, 7);
+        deferred.publish_tiberium_cells(
+            crate::rules::ruleset::RuleSet::empty_for_test(),
+            &registry,
+            &[(0, 1)],
+        );
+        assert_eq!(dummy(&deferred), (7, 7));
     }
 
     #[test]

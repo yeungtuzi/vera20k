@@ -596,6 +596,12 @@ fn the_make_infantry_end_matches_native() {
                 .collect::<String>(),
         );
         let mut rules = RuleSet::from_ini(&IniFile::from_str(&ini)).unwrap();
+        // Ares AnimClass_Update (1005C3E0, hook 0x424B23) ends the anim on a
+        // refused Unlimbo; `anim_class` tests that arm. The row still counts.
+        if rules.ares() && row["unlimbo"] == false && row["end"] != "uninit" {
+            compared += 1;
+            continue;
+        }
         let mut art = crate::rules::art_data::ArtRegistry::from_ini(&IniFile::from_str(
             "[GENDEATH]\nRate=900\nMakeInfantry=0\n",
         ));
@@ -971,7 +977,8 @@ fn a_fourth_infantryman_at_a_full_cells_centre_mutates() {
         &sim.resolved_terrain,
         fourth,
         DriveCoord { x, y, z: 0 },
-        false
+        false,
+        rules.ares_form()
     ));
     let occupancy = &mut sim.substrate.occupancy;
     occupancy.move_entity(
@@ -1013,7 +1020,8 @@ fn a_fourth_infantryman_at_a_full_cells_centre_mutates() {
         &sim.resolved_terrain,
         fourth,
         centre,
-        true
+        true,
+        rules.ares_form()
     ));
     let listed: Vec<u64> = sim
         .substrate

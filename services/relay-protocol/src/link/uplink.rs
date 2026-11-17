@@ -108,9 +108,11 @@ fn since(at: Option<u64>, now_ms: u64) -> u64 {
 }
 
 impl ClientSession {
-    /// Whether this session may send UPLINKs: ready, started, not left.
+    /// Whether this session may send UPLINKs: ready, started, not left, and
+    /// a player's: a watcher only pulls (README "Watchers").
     fn uplink_open(&self) -> bool {
         self.ready
+            && !self.is_watching()
             && self
                 .ordering
                 .as_ref()
@@ -316,7 +318,8 @@ impl ClientSession {
         )?;
         self.hop.uplinks += 1;
         let ordering = self.ordering.as_mut().expect("ordering");
-        let lossy = ordering.link.clock.state == LinkState::Lossy;
+        // A stream transport delivers the original first, so it takes no copies.
+        let lossy = !self.stream_transport && ordering.link.clock.state == LinkState::Lossy;
         let severe = ordering.link.loss.severe;
         let link = &mut ordering.link;
         let schedule = &mut link.schedule;
@@ -521,7 +524,11 @@ impl ClientSession {
     /// `seal_ordering_batch`'s body.
     pub(crate) fn seal_next_batch(&mut self, plaintext: &[u8]) -> Result<u64, RelayError> {
         let ordering = self.ordering.as_ref().ok_or(RelayError::Unregistered)?;
-        if !ordering.link.schedule.started || ordering.restoring || ordering.leave.is_some() {
+        if !ordering.link.schedule.started
+            || ordering.restoring
+            || ordering.leave.is_some()
+            || self.is_watching()
+        {
             return Err(RelayError::Unregistered);
         }
         let id = ordering.next_batch;
@@ -996,6 +1003,46 @@ mod tests {
         assert!(poll(&mut session, 156).is_some());
         assert!(poll(&mut session, 200).is_none());
         assert_eq!(session.link_stats().copies, 3);
+    }
+
+    #[test]
+    fn a_stream_transport_sends_no_lossy_copies_but_still_resends_by_rto() {
+        let mut session = started();
+        session.use_stream_transport();
+        link(&mut session).loss.lossy = true;
+        link(&mut session).loss.severe = true;
+        poll(&mut session, 0).unwrap();
+        session.seal_ordering_batch(b"streamed").unwrap();
+        assert_eq!(decoded(&poll(&mut session, 10).unwrap()).batches.len(), 1);
+        assert!(poll(&mut session, 26).is_none(), "no copy 16 ms on");
+        assert!(poll(&mut session, 42).is_none(), "no severe second copy");
+        let resent = poll(&mut session, 200).expect("the RTO resend");
+        assert_eq!(decoded(&resent).batches.len(), 1);
+        assert_eq!(session.link_stats().copies, 0);
+    }
+
+    #[test]
+    fn a_renewed_hop_keeps_the_stream_transport() {
+        let key = SecretKey::new([3; 32]);
+        let mut session = started();
+        session.use_stream_transport();
+        let ticket = Ticket {
+            room: [5; 16],
+            source: 0,
+            expires: 1500,
+            nonce: [2; 16],
+            player: [1; 16],
+            generation: 1,
+        }
+        .sign(&key)
+        .unwrap();
+        let packet_key = *crate::derive_packet_key(&key, &ticket).expose_for_https();
+        assert!(
+            session
+                .renewal(&ticket, packet_key, [9; 32])
+                .unwrap()
+                .stream_transport
+        );
     }
 
     #[test]

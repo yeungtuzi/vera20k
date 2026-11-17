@@ -343,11 +343,104 @@ fn original_pickup_rows_match_through_the_dispatcher() {
     assert_eq!(compared, 16);
 }
 
+/// PickupCrate4824A7..4824D4 selects the campaign's saved PlayerPtr, while
+/// 4824D9 keeps sound admission attached to the collecting House.
+#[test]
+fn solo_money_pays_saved_current_house_for_foreign_controlled_collector() {
+    let Some(retail) =
+        crate::rules::retail_ini_fixture::retail_battle_rules_for_map("sov02smd.map")
+    else {
+        return;
+    };
+    let mut rules = retail.rules;
+    assert_eq!(rules.crate_rules.solo_crate_money, 1500);
+    assert_eq!(rules.crate_rules.wood_crate, POWERUP_MONEY);
+    let bytes = crate::rules::retail_ini_fixture::retail_archive_bytes("MONEY.SHP").unwrap();
+    let frames = crate::assets::shp_file::ShpFile::frame_count_from_bytes(&bytes).unwrap();
+    rules.bind_anim_frame_count_for_test("MONEY", i32::from(frames));
+    let mut sim = crate::sim::arena_fixture::rival_arena(&rules, 31);
+    let terrain = sim.resolved_terrain.as_ref().unwrap().clone();
+    let terrain_speed = sim.terrain_speed_config().clone();
+    sim.session
+        .set_game_mode(crate::sim::scenario_session::ScenarioGameMode::Campaign);
+    sim.overlay_grid = Some(OverlayGrid::new(32, 32));
+    let current = sim.intern("Americans");
+    let collector = sim.intern("Russians");
+    for (id, name) in [(current, "Americans"), (collector, "Russians")] {
+        sim.houses
+            .get_mut(&id)
+            .unwrap()
+            .initialize_scenario_name(name);
+    }
+    sim.houses
+        .get_mut(&collector)
+        .unwrap()
+        .set_player_control_for_test(true);
+    crate::sim::scenario_bootstrap::initialize_campaign_current_house(
+        &mut sim.session,
+        &mut sim.houses,
+        &IniFile::from_str("[Basic]\nPlayer=Americans\n"),
+    );
+    assert!(
+        super::super::place_crate(
+            &mut sim,
+            &rules,
+            rules.overlay_registry(),
+            CELL,
+            Some(0),
+            FrameEffects::default(),
+        )
+        .unwrap()
+    );
+    let actor = sim
+        .spawn_object("MTNK", "Russians", 9, 10, 0, &rules)
+        .unwrap();
+    let bytes = crate::sim::snapshot::GameSnapshot::save(&sim, 0, 0, "solo-crate", 0);
+    let mut sim = crate::sim::snapshot::GameSnapshot::load(&bytes)
+        .unwrap()
+        .sim;
+    sim.restore_after_snapshot_load().unwrap();
+    sim.rebuild_caches_after_load(terrain, terrain_speed, &rules);
+    sim.restore_map_authority_after_snapshot_load(&rules, rules.overlay_registry(), None)
+        .unwrap();
+    assert_eq!(sim.session.current_house(), Some(current));
+    assert!(sim.house_is_human_player(collector));
+    assert!(overlay_at(&sim, CELL).is_some());
+    assert_eq!(
+        super::super::read_crate_mark_fields(&sim, CELL),
+        (overlay_at(&sim, CELL), 0)
+    );
+    let balances = [current, collector].map(|id| sim.houses[&id].economy().credits());
+    let rng = sim.scenario_rng.native_state_hex();
+    assert!(pickup_crate(
+        &mut sim,
+        &rules,
+        rules.overlay_registry(),
+        CELL,
+        actor,
+        FrameEffects::default(),
+    ));
+    assert_eq!(sim.houses[&current].economy().credits(), balances[0] + 1500);
+    assert_eq!(sim.houses[&collector].economy().credits(), balances[1]);
+    assert_eq!(overlay_at(&sim, CELL), None);
+    assert_eq!(sim.scenario_rng.native_state_hex(), rng);
+    assert_eq!(
+        sounds(&sim),
+        vec![("CrateMoney".into(), Some([collector, collector]))]
+    );
+    let animations: Vec<_> = sim.anims().map(|(_, anim)| anim).collect();
+    assert_eq!(animations.len(), 1);
+    assert_eq!(sim.resolve(animations[0].type_id()), "MONEY");
+    assert_eq!(animations[0].owner_house(), None);
+}
+
 /// `0x00482463..0x00482560`: `RandomRanged(ftol(magnitude), +900)` on the
 /// Scenario RNG, `Add_Credits` on the actor's house, the money sound for it.
 #[test]
 fn money_crate_draws_once_pays_the_owner_and_sounds() {
     let (mut sim, mut rules, registry, owner, actor) = multiplayer_fixture(0);
+    let other = house(&mut sim, "CURRENT", true);
+    sim.session.set_current_house_for_test(Some(other));
     rules.powerups.magnitudes[POWERUP_MONEY] = NativeF64Bits::from_bits(2000.0_f64.to_bits());
     rules.general.crate_money_sound = Some("CrateMoney".into());
     let mut probe = sim.scenario_rng.clone();
@@ -364,6 +457,7 @@ fn money_crate_draws_once_pays_the_owner_and_sounds() {
     ));
 
     assert_eq!(sim.houses[&owner].economy().credits(), expected);
+    assert_eq!(sim.houses[&other].economy().credits(), 0);
     assert_eq!(
         sim.scenario_rng.native_state_hex(),
         probe.native_state_hex()
@@ -471,12 +565,24 @@ fn cloak_crate_grants_foot_stealth_inside_the_strict_radius_and_then_falls_back(
     let grid = sim.path_grid_snapshot();
     sim.advance_tick(&[], Some(&rules), grid.as_deref(), Some(&registry), 22);
     assert_eq!(
-        sim.entities().get(actor).unwrap().cloak.unwrap().state(),
+        sim.entities()
+            .get(actor)
+            .unwrap()
+            .cloak
+            .as_ref()
+            .unwrap()
+            .state(),
         1,
         "infantry also runs Foot cloak AI"
     );
     assert_eq!(
-        sim.entities().get(nearby).unwrap().cloak.unwrap().state(),
+        sim.entities()
+            .get(nearby)
+            .unwrap()
+            .cloak
+            .as_ref()
+            .unwrap()
+            .state(),
         1,
         "the gift ignores allegiance"
     );
@@ -641,8 +747,7 @@ fn armor_and_firepower_crates_multiply_once_and_announce() {
             .entities
             .get(id)
             .unwrap()
-            .crate_multipliers
-            .armor()
+            .armor_multiplier()
     };
     assert_eq!(armor(&sim, actor).bits(), 1.5_f64.to_bits());
     assert_eq!(armor(&sim, distant), NativeF64Bits::ONE);
@@ -684,16 +789,14 @@ fn armor_and_firepower_crates_multiply_once_and_announce() {
         .entities
         .get(actor)
         .unwrap()
-        .crate_multipliers
-        .firepower();
+        .firepower_multiplier();
     assert_eq!(firepower.bits(), 2.0_f64.to_bits());
     assert_eq!(
         sim.substrate
             .entities
             .get(distant)
             .unwrap()
-            .crate_multipliers
-            .firepower(),
+            .firepower_multiplier(),
         NativeF64Bits::ONE
     );
     assert!(eva_events(&sim).contains(&(owner, "EVA_UnitFirePowerUpgraded")));
@@ -796,9 +899,10 @@ const ARENA_RULES: &str = "[Countries]\n0=Americans\n1=Russians\n[Sides]\nAllied
              [Powerups]\nMoney=20,MONEY,yes,2000\nUnit=20,<none>,no\nHealBase=10,HEALALL,yes\n";
 
 fn arena() -> (Simulation, RuleSet, OverlayTypeRegistry, InternedId, u64) {
-    let rules = RuleSet::from_ini_with_fixed_art_for_test(
+    let rules = RuleSet::from_ini_with_fixed_art_and_sounds_for_test(
         &IniFile::from_str(ARENA_RULES),
         &IniFile::from_str("[YARD]\nFoundation=4x3\n"),
+        &["HealCrate"],
     )
     .unwrap();
     let mut sim = Simulation::new();
@@ -951,6 +1055,32 @@ fn mcv_preempt_grants_the_base_unit_with_bases_on() {
 /// house's Logic members, including buildings.
 #[test]
 fn heal_base_crate_restores_the_owners_buildings() {
+    use crate::sim::world::{FrameEffects, SoundBoundary};
+    use std::cell::{Cell, RefCell};
+
+    struct Heard {
+        actor: u64,
+        building: u64,
+        delivered: Cell<usize>,
+        health_at_sound: RefCell<Vec<(i32, i32)>>,
+    }
+    impl SoundBoundary for Heard {
+        fn consume(&self, sim: &Simulation, _: &RuleSet, events: &[SimSoundEvent]) {
+            for event in &events[self.delivered.get()..] {
+                if matches!(event, SimSoundEvent::VocAt { sound_id, .. } if sound_id.eq_ignore_ascii_case("HealCrate"))
+                {
+                    self.health_at_sound.borrow_mut().push((
+                        sim.entities().get(self.actor).unwrap().health.current(),
+                        sim.entities().get(self.building).unwrap().health.current(),
+                    ));
+                }
+            }
+            self.delivered.set(events.len());
+        }
+        fn delivered(&self) -> usize {
+            self.delivered.get()
+        }
+    }
     let (mut sim, rules, registry, owner, actor) = arena();
     let rival = sim.interner.intern("Russians");
     sim.houses
@@ -969,6 +1099,18 @@ fn heal_base_crate_restores_the_owners_buildings() {
             .health
             .set_for_test(400);
     }
+    sim.substrate
+        .entities
+        .get_mut(actor)
+        .unwrap()
+        .health
+        .set_for_test(180);
+    let heard = Heard {
+        actor,
+        building: own,
+        delivered: Cell::new(0),
+        health_at_sound: RefCell::default(),
+    };
     place_registered_crate(&mut sim, &registry, (21, 22), POWERUP_HEAL_BASE as u8);
 
     assert!(pickup_crate(
@@ -977,9 +1119,14 @@ fn heal_base_crate_restores_the_owners_buildings() {
         &registry,
         (21, 22),
         actor,
-        crate::sim::world::FrameEffects::default()
+        FrameEffects::for_sound(&heard)
     ));
 
+    assert_eq!(
+        *heard.health_at_sound.borrow(),
+        vec![(180, 400)],
+        "native HealCrate playback precedes every healing receiver"
+    );
     assert_eq!(
         sim.substrate.entities.get(own).unwrap().health.current(),
         1000
@@ -988,10 +1135,10 @@ fn heal_base_crate_restores_the_owners_buildings() {
         sim.substrate.entities.get(theirs).unwrap().health.current(),
         400
     );
-    // `[CrateRules]` retains the upper-cased name at its data boundary.
+    // The fixed SOUNDMD identity reaches the existing event channel.
     assert_eq!(
         sounds(&sim),
-        vec![("HEALCRATE".to_string(), Some([owner, owner]))]
+        vec![("HealCrate".to_string(), Some([owner, owner]))]
     );
 }
 
@@ -1043,7 +1190,7 @@ fn heal_base_reaches_mobile_logic_members_and_the_zero_damage_receiver() {
     }
     let mut cloak = crate::sim::cloak_disguise::CloakRuntime::new(0);
     cloak.set_state_for_test(2);
-    sim.substrate.entities.get_mut(tank).unwrap().cloak = Some(cloak);
+    sim.substrate.entities.get_mut(tank).unwrap().cloak = Some(Box::new(cloak));
     let logic = vec![aircraft, 0, enemy, infantry, tank];
     sim.set_logic_order_for_test(logic.clone());
     place_registered_crate(&mut sim, &registry, (21, 22), POWERUP_HEAL_BASE as u8);
@@ -1074,11 +1221,12 @@ fn heal_base_reaches_mobile_logic_members_and_the_zero_damage_receiver() {
             .get(tank)
             .unwrap()
             .cloak
+            .as_ref()
             .unwrap()
             .state(),
         // Installed Ares702819 ->1004AB50 resumes at 702823 for a zero result,
         // past the Uncloak call.
-        if cfg!(feature = "ares") { 2 } else { 3 }
+        if rules.ares() { 2 } else { 3 }
     );
     assert_eq!(sim.logic_order(), logic);
     assert_eq!(overlay_at(&sim, (21, 22)), None);
@@ -1237,6 +1385,45 @@ fn a_walking_soldier_picks_up_the_crate_on_his_path() {
         "the soldier crossed the crate"
     );
     assert!(sim.houses[&owner].economy().credits() > credits);
+}
+
+/// `CellClass::PickupCrate @ 0x0048208A..0x0048214B`: the miner arm asks for
+/// one of the first two `[AI] BuildRefinery=` types (Rules `+0x8E4`), not a
+/// construction yard. The house owns one building; listed as a refinery it
+/// earns the miner, listed only as a yard it draws a random goodie.
+#[test]
+fn unit_crate_gives_a_miner_to_a_house_with_a_refinery_and_no_miner() {
+    for (ai_lists, expected) in [
+        ("BuildRefinery=YARD\n", "HARV"),
+        ("BuildConst=YARD\nBuildRefinery=REF\n", "TNK"),
+    ] {
+        let (mut sim, arena_rules, _, owner, _) = arena();
+        sim.spawn_object("YARD", "Americans", 8, 8, 0, &arena_rules)
+            .expect("the building spawns");
+        let rules = RuleSet::from_ini(&IniFile::from_str(&format!(
+            "[Countries]\n0=Americans\n[Sides]\nAllied=Americans\n[Americans]\nSide=Allied\n\
+             [General]\nHarvesterUnit=HARV\n[AI]\n{ai_lists}\
+             [VehicleTypes]\n0=TNK\n1=HARV\n[BuildingTypes]\n0=YARD\n1=REF\n\
+             [TNK]\nStrength=300\nCrateGoodie=yes\n\
+             [HARV]\nStrength=1000\nOwner=Americans\nHarvester=yes\n\
+             [YARD]\nStrength=1000\n[REF]\nStrength=1000\n"
+        )))
+        .unwrap();
+        assert_eq!(
+            effects::choose_unit_crate_type(
+                &sim.interner,
+                &sim.session,
+                &mut sim.scenario_rng,
+                &sim.houses,
+                &rules,
+                owner,
+                false
+            )
+            .map(|object| object.id.as_str()),
+            Some(expected),
+            "with [AI] {ai_lists:?}"
+        );
+    }
 }
 
 /// A nonempty CrateGoodie pool can still have no acceptable candidate: an
@@ -2334,4 +2521,19 @@ fn total_bales(sim: &Simulation, registry: &OverlayTypeRegistry) -> u32 {
         }
     }
     total
+}
+
+/// Ares 3.0 1002C8A0 (hook 0x48248D): the Money crate pays `base +
+/// RandomRanged(0, [CrateRules] RandomCrateMoney)`; 0 pays the base and
+/// draws nothing.
+#[test]
+fn ares_random_crate_money_bounds_the_top_up() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let rules =
+        RuleSet::from_ini(&IniFile::from_str("[CrateRules]\nRandomCrateMoney=0\n")).unwrap();
+    let mut rng = crate::sim::rng::SimRng::new(7);
+    let before = rng.clone();
+    let base = NativeF64Bits::from_bits(2000.0_f64.to_bits());
+    assert_eq!(effects::money_crate_amount(&mut rng, &rules, 0, base), 2000);
+    assert_eq!(rng.next_u32(), before.clone().next_u32(), "no draw");
 }

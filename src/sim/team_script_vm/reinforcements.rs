@@ -41,6 +41,27 @@ impl Simulation {
         }
     }
 
+    /// Ares 3.0 TeamTypeClass_ValidateHouse (1005D170, hooks 0x65D8FB and
+    /// 0x65EC4A), at the entry of both reinforcement owners: the TeamType's
+    /// House (GetHouse) must exist, and unless the TeamType names a Country
+    /// (`+0xC4`) or this is a campaign, must not be defeated.
+    fn ares_reinforcement_house_valid(&self, team_type: InternedId, rules: &RuleSet) -> bool {
+        let Some(house) = self.team_type_house(team_type, rules) else {
+            return false;
+        };
+        let country = self
+            .team_script_vm
+            .team_type_ini
+            .get(&team_type)
+            .is_some_and(|metadata| matches!(metadata.house, Some(TeamTypeHouse::Country(_))));
+        country
+            || !self.session.game_mode_nonzero()
+            || !self
+                .houses
+                .get(&house)
+                .is_some_and(|state| state.is_defeated())
+    }
+
     fn team_initial_zone(&self, team_type: InternedId) -> Option<TeamTarget> {
         let waypoint = self.team_script_vm.team_type_ini.get(&team_type)?.waypoint;
         self.session
@@ -76,6 +97,25 @@ impl Simulation {
         Some(id)
     }
 
+    /// `TeamClass::TeamClass @ 0x006E8A90` called directly, with no `Max=`
+    /// gate: Reinforcement65DD30 and team script action 18 (`0x006E96E4`).
+    /// The constructor takes the TeamType's initial waypoint and its own Tag.
+    pub(crate) fn construct_team_unlimited(
+        &mut self,
+        team_type: InternedId,
+        owner: InternedId,
+    ) -> Option<u64> {
+        let zone = self.team_initial_zone(team_type);
+        let team = self.team_script_vm.construct_team_instance(
+            team_type,
+            owner,
+            self.session.binary_frame() as i32,
+            zone,
+        )?;
+        self.attach_team_trigger_tag(team, team_type);
+        Some(team)
+    }
+
     /// Trigger4 original6DEB6B brackets CreateTeam with A8E7AC. Recruiting
     /// remains in TeamAI's normal same-frame visit, using real class arrays.
     pub(crate) fn trigger_create_team(
@@ -100,6 +140,9 @@ impl Simulation {
         registry: Option<&OverlayTypeRegistry>,
         effects: FrameEffects<'_>,
     ) -> (bool, Option<(i16, i16)>) {
+        if rules.ares_form() && !self.ares_reinforcement_house_valid(team_type, rules) {
+            return (false, None);
+        }
         let Some(definition) = self.team_script_vm.team_types.get(&team_type).copied() else {
             return (false, None);
         };
@@ -279,6 +322,9 @@ impl Simulation {
         registry: Option<&OverlayTypeRegistry>,
         effects: FrameEffects<'_>,
     ) -> (bool, Option<(i16, i16)>) {
+        if rules.ares_form() && !self.ares_reinforcement_house_valid(team_type, rules) {
+            return (false, None);
+        }
         let Some(definition) = self.team_script_vm.team_types.get(&team_type).copied() else {
             return (false, None);
         };
@@ -524,17 +570,6 @@ impl Simulation {
         let Some(&head) = members.first() else {
             return false;
         };
-        let plane_type = crate::sim::superweapon::paradrop::PDPLANE;
-        if rules
-            .object_in_category(ObjectCategory::Aircraft, plane_type)
-            .is_none()
-        {
-            // Native FindIndex(-1) would dereference before the Aircraft
-            // array. A missing literal type is outside a valid retail rules
-            // closure; retain explicit diagnostics instead of a fake plane.
-            log::warn!("Droppod reinforcement requires native aircraft type {plane_type}");
-            return false;
-        }
         //65DBD0 reads the returned head's live owner, not a copied TeamType
         // Country or current player. The carrier itself never joins the Team.
         let Some(owner) = self
@@ -545,6 +580,21 @@ impl Simulation {
         else {
             return false;
         };
+        // Ares 3.0 TeamTypeClass_CreateInstance_Plane (1003A340, hook
+        // 0x65DBB3): that owner's GetParadropPlane replaces the PDPLANE
+        // literal.
+        let plane_type =
+            crate::sim::superweapon::paradrop::house_paradrop_plane(self, rules, owner);
+        if rules
+            .object_in_category(ObjectCategory::Aircraft, plane_type)
+            .is_none()
+        {
+            // Native FindIndex(-1) would dereference before the Aircraft
+            // array. A missing literal type is outside a valid retail rules
+            // closure; retain explicit diagnostics instead of a fake plane.
+            log::warn!("Droppod reinforcement requires native aircraft type {plane_type}");
+            return false;
+        }
         let owner_name = self.interner.resolve(owner).to_string();
         let plane = self.with_object_placement_scope(|sim| {
             sim.construct_object_limbo_at_height(
@@ -730,14 +780,7 @@ impl Simulation {
             return None;
         }
         let owner = self.team_type_house(team_type, rules)?;
-        let zone = self.team_initial_zone(team_type);
-        let team = self.team_script_vm.construct_team_instance(
-            team_type,
-            owner,
-            self.session.binary_frame() as i32,
-            zone,
-        )?;
-        self.attach_team_trigger_tag(team, team_type);
+        let team = self.construct_team_unlimited(team_type, owner)?;
         let state = self
             .team_script_vm
             .teams

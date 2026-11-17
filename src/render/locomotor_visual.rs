@@ -60,7 +60,25 @@
 //! - Part of render/ — reads sim/ state read-only and writes none of it.
 //! - sim/ NEVER depends on render/, so nothing here may be called from sim/.
 
-use crate::sim::game_entity::GameEntity;
+use crate::map::entities::EntityCategory;
+use crate::sim::components::Position;
+
+/// What placing an object on the screen reads of it: a live object, or its
+/// record in the presentation frame (`app::presentation::frame`).
+pub trait Placed {
+    fn placed_position(&self) -> &Position;
+    fn placed_category(&self) -> EntityCategory;
+}
+
+impl Placed for crate::sim::game_entity::GameEntity {
+    fn placed_position(&self) -> &Position {
+        &self.position
+    }
+
+    fn placed_category(&self) -> EntityCategory {
+        self.category()
+    }
+}
 
 /// Presentation-only extension of Tactical::AdjustForZ @ 0x006D20E0 for
 /// buildings on high terrain. Its native scale agrees with 15px terrain
@@ -77,9 +95,9 @@ pub(crate) fn building_terrain_correction(level: i32) -> i32 {
         )
 }
 
-fn entity_terrain_correction(entity: &GameEntity) -> i32 {
-    if entity.category() == crate::map::entities::EntityCategory::Structure {
-        building_terrain_correction(i32::from(entity.position.z() as i8))
+fn entity_terrain_correction(entity: &(impl Placed + ?Sized)) -> i32 {
+    if entity.placed_category() == EntityCategory::Structure {
+        building_terrain_correction(i32::from(entity.placed_position().z() as i8))
     } else {
         0
     }
@@ -103,9 +121,16 @@ fn entity_terrain_correction(entity: &GameEntity) -> i32 {
 /// delegates to virtual `GetCoords`; the InfantryClass receiver reaches
 /// `ObjectClass__GetCoords` at `0x005F65A0`, which copies exact XYZ and adds no
 /// walking sine bob. Grounded objects therefore have zero additional lift.
-pub fn height_lift_px(entity: &GameEntity) -> f32 {
-    (crate::util::native_x87::adjust_for_z_standard(entity.position.exact_z_leptons().unwrap_or(0))
-        + entity_terrain_correction(entity)) as f32
+pub fn height_lift_px(entity: &(impl Placed + ?Sized)) -> f32 {
+    let z = entity.placed_position().exact_z_leptons().unwrap_or(0);
+    // Standard AdjustForZ(0) is exactly 0, including its +0.5/chop. This
+    // common ground-level case need not enter the x87 evaluator.
+    let lift = if z == 0 {
+        0
+    } else {
+        crate::util::native_x87::adjust_for_z_standard(z)
+    };
+    (lift + entity_terrain_correction(entity)) as f32
 }
 
 /// Where this entity is drawn, in world-space screen pixels.
@@ -116,46 +141,33 @@ pub fn height_lift_px(entity: &GameEntity) -> f32 {
 ///
 /// A building's *art* is the single exception, and it is a strict addition on
 /// top of this answer rather than a second one: see [`building_art_anchor`].
-pub fn screen_position(entity: &GameEntity) -> (f32, f32) {
-    let (sx, sy) = if entity.position.exact_z_leptons().is_some() {
-        z_free_screen_position(&entity.position)
+pub fn screen_position(entity: &(impl Placed + ?Sized)) -> (f32, f32) {
+    let (sx, sy) = if entity.placed_position().exact_z_leptons().is_some() {
+        z_free_screen_position(entity.placed_position())
     } else {
-        ground_screen_position(&entity.position)
+        ground_screen_position(entity.placed_position())
     };
     (sx, sy - height_lift_px(entity))
-}
-
-/// Both render anchors for a consumer that needs position AND lift. Exact-Z
-/// objects share the same native AdjustForZ evaluation rather than requesting
-/// it again through screen_lift_px. Keep the stored-level fallback unchanged:
-/// its projection and depth lift are deliberately different paths.
-pub(crate) fn screen_position_and_lift(entity: &GameEntity) -> ((f32, f32), i32) {
-    if let Some(z) = entity.position.exact_z_leptons() {
-        let (sx, sy) = z_free_screen_position(&entity.position);
-        // Standard AdjustForZ(0) is exactly 0, including its +0.5/chop.
-        // This common ground-level case need not enter the x87 evaluator.
-        let lift = if z == 0 {
-            0
-        } else {
-            crate::util::native_x87::adjust_for_z_standard(z)
-        };
-        let lift = lift + entity_terrain_correction(entity);
-        ((sx, sy - lift as f32), lift)
-    } else {
-        (screen_position(entity), screen_lift_px(entity))
-    }
 }
 
 /// [`screen_position`] of `entity`'s coordinate moved `distance` leptons along
 /// `facing`, at the same Z: the full-direction step Walk and Fly take
 /// ([`crate::util::native_trig::facing_step_world_xy`]), then the same
 /// projection.
-pub fn facing_step_screen_position(entity: &GameEntity, facing: u16, distance: i32) -> (f32, f32) {
-    let location = crate::sim::movement::ground_pose::position_world_xy(&entity.position);
+pub fn facing_step_screen_position(
+    entity: &(impl Placed + ?Sized),
+    facing: u16,
+    distance: i32,
+) -> (f32, f32) {
+    let location = crate::sim::movement::ground_pose::position_world_xy(entity.placed_position());
     let [x, y] = crate::util::native_trig::facing_step_world_xy(location, facing, distance);
-    let z = entity.position.exact_z_leptons().unwrap_or_else(|| {
-        i32::from(entity.position.z() as i8) * crate::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS
-    });
+    let z = entity
+        .placed_position()
+        .exact_z_leptons()
+        .unwrap_or_else(|| {
+            i32::from(entity.placed_position().z() as i8)
+                * crate::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS
+        });
     let (sx, sy) = crate::util::lepton::absolute_leptons_to_screen(x, y, z);
     (sx, sy - entity_terrain_correction(entity) as f32)
 }
@@ -197,11 +209,12 @@ pub(crate) fn fly_draw_point_y(
 /// cancels its lift for depth or per-pixel Z
 /// cancels this, including the high-terrain correction, as the building
 /// draw's `NormalZAdjust - AdjustForZ(Z)` seed does (`BuildingClass_DrawBody`).
-pub fn screen_lift_px(entity: &GameEntity) -> i32 {
-    let native = match entity.position.exact_z_leptons() {
+pub fn screen_lift_px(entity: &(impl Placed + ?Sized)) -> i32 {
+    let native = match entity.placed_position().exact_z_leptons() {
         Some(z) => crate::util::native_x87::adjust_for_z_standard(z),
         None => crate::util::native_x87::adjust_for_z_standard(
-            i32::from(entity.position.z() as i8) * crate::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS,
+            i32::from(entity.placed_position().z() as i8)
+                * crate::util::lepton::GROUND_LEVEL_HEIGHT_LEPTONS,
         ),
     };
     native + entity_terrain_correction(entity)
@@ -271,10 +284,11 @@ fn z_free_screen_position(position: &crate::sim::components::Position) -> (f32, 
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_render_a_r))]
 mod tests {
     use super::*;
     use crate::map::entities::EntityCategory;
+    use crate::sim::game_entity::GameEntity;
 
     #[test]
     fn high_terrain_building_anchor_matches_its_tile_and_depth_lift() {
@@ -289,11 +303,10 @@ mod tests {
         for (level, exact_z) in [(14, Some(1456)), (36, Some(3744)), (36, None)] {
             building.position.set_z_for_test(level);
             building.position.set_exact_z_leptons_for_test(exact_z);
-            let ((x, y), lift) = screen_position_and_lift(&building);
+            let (x, y) = screen_position(&building);
+            let lift = screen_lift_px(&building);
             let (tile_x, tile_y) = crate::map::terrain::iso_to_screen(189, 258, level);
             assert_eq!(building_art_anchor(x, y), (tile_x + 30.0, tile_y));
-            assert_eq!(screen_position(&building), (x, y));
-            assert_eq!(screen_lift_px(&building), lift);
             assert_eq!(
                 y + lift as f32,
                 z_free_screen_position(&building.position).1

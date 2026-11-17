@@ -2750,6 +2750,10 @@ struct RetaliationCase {
     damage: i32,
     verses: &'static str,
     player_return_fire: bool,
+    /// The source rides an open-topped transport (id 3, type SOURCE) in its
+    /// cell; the victim must then turn on whichever of the two the hook
+    /// under test names.
+    rider: bool,
 }
 
 /// ReceiveDamage702A69 asks CanFireAt before the human Sight fallback. This
@@ -2851,6 +2855,7 @@ impl Default for RetaliationCase {
             damage: 1,
             verses: "100%",
             player_return_fire: false,
+            rider: false,
         }
     }
 }
@@ -2893,6 +2898,14 @@ fn retaliates(case: RetaliationCase) -> bool {
             case.source_sub_x,
         ));
     source.lifecycle.set_cell_marked_for_test(true);
+    if case.rider {
+        source.passenger_role = crate::sim::passenger::PassengerRole::boarded_for_test(3, true);
+        let mut transport = make_entity(3, "SOURCE", source_rx, 5, case.source_health);
+        transport.set_owner_for_test(source_owner);
+        transport.set_type_ref_for_test(interner.intern("SOURCE"));
+        transport.lifecycle.set_cell_marked_for_test(true);
+        entities.insert(transport);
+    }
     entities.insert(source);
     let mut victim = make_entity(2, "VICTIM", victim_rx, 5, 100);
     victim.set_owner_for_test(victim_owner);
@@ -2937,10 +2950,23 @@ fn retaliates(case: RetaliationCase) -> bool {
         &mut SimRng::new(11),
         &mut SimRng::new(13),
     );
+    let source = if case.rider { 3 } else { 1 };
     entities
         .get(2)
         .and_then(|victim| victim.attack_target.target())
-        .is_some_and(|attack| attack == TargetKind::Entity(1))
+        .is_some_and(|attack| attack == TargetKind::Entity(source))
+}
+
+/// Ares 3.0 TechnoClass_ReceiveDamage_OpenTopped (1004AD10, hook 0x702A38):
+/// a hit from a rider of an open-topped transport makes the victim
+/// retaliate against the transport.
+#[test]
+fn ares_retaliation_turns_on_an_open_topped_riders_transport() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    assert!(retaliates(RetaliationCase {
+        rider: true,
+        ..Default::default()
+    }));
 }
 
 /// `ShouldRetaliate 0x007089E8..0x00708A26`: unless `PlayerReturnFire=`, a
@@ -3044,36 +3070,39 @@ fn gsi_04_07_a_human_unit_does_not_charge_an_unseen_shooter() {
 /// heal test would allow.
 #[test]
 fn gsi_04_07_retaliation_verses_and_healer_gates() {
-    // Ares3.0 parser100523E0 and retaliation hook100543E0 replace the stock
-    // threshold: tools/rules_oracle/ares_armor.json `parse_1%` has Retaliate=false.
-    assert_eq!(
-        retaliates(RetaliationCase {
-            verses: "1%",
-            ..Default::default()
-        }),
-        !crate::rules::ARES_ENABLED,
-    );
-    assert!(!retaliates(RetaliationCase {
-        verses: "0.005",
-        ..Default::default()
-    }));
-    assert!(!retaliates(RetaliationCase {
-        verses: "0%",
-        ..Default::default()
-    }));
-    assert!(!retaliates(RetaliationCase {
-        damage: 0,
-        ..Default::default()
-    }));
-    for source_health in [200, 100] {
-        assert!(
-            !retaliates(RetaliationCase {
-                damage: -5,
-                source_health,
+    for ares_way in [false, true] {
+        let _ares = crate::rules::ares_switch::read_ares_way(ares_way);
+        // Ares3.0 parser100523E0 and retaliation hook100543E0 replace the stock
+        // threshold: tools/rules_oracle/ares_armor.json `parse_1%` has Retaliate=false.
+        assert_eq!(
+            retaliates(RetaliationCase {
+                verses: "1%",
                 ..Default::default()
             }),
-            "{source_health}"
+            !ares_way,
         );
+        assert!(!retaliates(RetaliationCase {
+            verses: "0.005",
+            ..Default::default()
+        }));
+        assert!(!retaliates(RetaliationCase {
+            verses: "0%",
+            ..Default::default()
+        }));
+        assert!(!retaliates(RetaliationCase {
+            damage: 0,
+            ..Default::default()
+        }));
+        for source_health in [200, 100] {
+            assert!(
+                !retaliates(RetaliationCase {
+                    damage: -5,
+                    source_health,
+                    ..Default::default()
+                }),
+                "{source_health}"
+            );
+        }
     }
 }
 
@@ -4097,13 +4126,13 @@ fn gsi_04_07_damage_spawn_and_slave_managers_block_retaliation() {
                 .object("SLAVEMASTER")
                 .and_then(|object| object.enslaves.as_deref())
                 .expect("resolved Enslaves profile creates native SlaveManager");
-            victim.slave_manager = Some(crate::sim::slave_manager::SlaveManager::new(
+            victim.slave_manager = Some(Box::new(crate::sim::slave_manager::SlaveManager::new(
                 interner.intern(slave_type),
                 [None; 0],
                 0,
                 0,
                 0,
-            ));
+            )));
         }
         entities.insert(victim);
 
@@ -4199,11 +4228,11 @@ fn gsi_04_07_damage_full_capture_manager_blocks_retaliation() {
             entities.insert(controlled);
         }
         // The stock tower's link limit (`[MultipleMindControlTower] Damage=3`).
-        victim.capture_manager = Some(
+        victim.capture_manager = Some(Box::new(
             crate::sim::capture_manager::CaptureManagerState::with_victims_for_test(
                 3, false, &links,
             ),
-        );
+        ));
         entities.insert(victim);
 
         let event = EntityDamageEvent::area(2, 1, 0, 1, Some(source_owner), hit_wh);
@@ -4552,6 +4581,7 @@ fn gsi_04_07_damage_postmortem_stock_barrel_delay_and_nested_order() {
         .entities
         .get_mut(edge)
         .unwrap()
+        .building
         .pending_c4_detonation
         .set_for_test(Some(crate::sim::c4_plant::PendingC4Detonation::new(
             crate::sim::timer::CdTimer::started(0, 40),
@@ -4577,7 +4607,7 @@ fn gsi_04_07_damage_postmortem_stock_barrel_delay_and_nested_order() {
         sim.substrate
             .entities
             .get(id)
-            .and_then(|entity| entity.pending_c4_detonation.pending())
+            .and_then(|entity| entity.building.pending_c4_detonation.pending())
             .expect("qualifying fatal barrel becomes PostMortem")
     };
     assert_eq!(pending(&sim, center).timer().duration(), 5);
@@ -4610,6 +4640,7 @@ fn gsi_04_07_damage_postmortem_stock_barrel_delay_and_nested_order() {
             .entities
             .get(middle)
             .unwrap()
+            .building
             .pending_c4_detonation
             .pending()
             .is_none()
@@ -4737,6 +4768,7 @@ fn gsi_04_07_damage_postmortem_exact_zero_callbacks_precede_restore() {
         .entities
         .get(target_id)
         .unwrap()
+        .building
         .pending_c4_detonation
         .pending()
         .expect("PostMortem arms the shared timer after callbacks");
@@ -4842,7 +4874,7 @@ fn gsi_04_07_damage_postmortem_exact_zero_callbacks_precede_restore() {
     let target = sim.substrate.entities.get(target_id).unwrap();
     assert_eq!(target.health.current(), 1);
     assert_eq!(
-        target.pending_c4_detonation.pending(),
+        target.building.pending_c4_detonation.pending(),
         Some(original_pending)
     );
     assert!(target.lifecycle.object_alive() && target.in_logic_vector.is_member());
@@ -6373,9 +6405,8 @@ fn gsi_08_01_a_shared_cell_offers_only_its_list_head() {
         crate::sim::combat::ScanMission::Guard,
         None,
         crate::sim::combat::line_of_fire::LineOfFireInputs {
-            overlay_grid: None,
-            overlay_registry: None,
             alliances: Some(&HouseAlliances::default()),
+            ..Default::default()
         },
         None,
         None,
@@ -6420,14 +6451,73 @@ fn mapless_guard_pick(shell: &str) -> Option<u64> {
         crate::sim::combat::ScanMission::Guard,
         None,
         crate::sim::combat::line_of_fire::LineOfFireInputs {
-            overlay_grid: None,
-            overlay_registry: None,
             alliances: Some(&HouseAlliances::default()),
+            ..Default::default()
         },
         None,
         None,
     )
     .object()
+}
+
+/// A mapless Guard scan by a human player's guarding `ART` (with `art`) of
+/// one enemy `MTNK` (with `target`) a cell away.
+fn ares_guarding_pick(art: &str, target: &str) -> Option<u64> {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let rules = RuleSet::from_ini(&IniFile::from_str(&format!(
+        "[InfantryTypes]\n[VehicleTypes]\n0=ART\n1=MTNK\n[AircraftTypes]\n[BuildingTypes]\n\
+         [ART]\nStrength=300\nArmor=heavy\nSpeed=6\nPrimary=Shell\n{art}\n\
+         [MTNK]\nStrength=300\nArmor=heavy\nSpeed=6\n{target}\n\
+         [Shell]\nDamage=65\nROF=50\nRange=8\nWarhead=AP\n\
+         [AP]\nVerses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n"
+    )))
+    .expect("guard scan rules");
+    let mut store = EntityStore::new();
+    let mut scanner = make_entity_owned(10, "ART", 5, 5, 300, "Americans");
+    scanner.mission.set_current_for_test(
+        crate::sim::mission::MissionId::from_known(crate::sim::mission::MissionType::Guard),
+        0,
+    );
+    store.insert(scanner);
+    store.insert(make_entity_owned(20, "MTNK", 6, 5, 300, "Soviet"));
+    let interner = test_interner();
+    let mut fog = FogState::default();
+    fog.mark_visible_for_owner(test_intern("Americans"), 6, 5);
+    let occupancy = mark_fixture_entities(&mut store);
+    crate::sim::combat::combat_targeting::greatest_threat_for_entity(
+        &store,
+        &occupancy,
+        &rules,
+        &interner,
+        10,
+        Some(&fog),
+        None,
+        false,
+        crate::sim::combat::ScanMission::Guard,
+        None,
+        crate::sim::combat::line_of_fire::LineOfFireInputs {
+            alliances: Some(&HouseAlliances::default()),
+            ..Default::default()
+        },
+        None,
+        None,
+    )
+    .object()
+}
+
+/// Ares `CanPassiveAquire.Guard=no` stops a human player's guarding Foot
+/// from scanning (hook 0x4D9920), and `CivilianEnemy=yes` makes an
+/// `Insignificant=` candidate an enemy (hook 0x6F826E).
+#[test]
+fn ares_passive_acquire_and_civilian_enemy_gate_the_guard_scan() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    assert_eq!(ares_guarding_pick("", ""), Some(20));
+    assert_eq!(ares_guarding_pick("CanPassiveAquire.Guard=no", ""), None);
+    assert_eq!(ares_guarding_pick("", "Insignificant=yes"), None);
+    assert_eq!(
+        ares_guarding_pick("", "Insignificant=yes\nCivilianEnemy=yes"),
+        Some(20)
+    );
 }
 
 /// Without resolved terrain the Guard scan's CanFireAt arm asks the shared
@@ -6467,9 +6557,8 @@ fn gsi_08_01_unarmed_building_loses_to_a_tank_at_equal_distance() {
         crate::sim::combat::ScanMission::Guard,
         None,
         crate::sim::combat::line_of_fire::LineOfFireInputs {
-            overlay_grid: None,
-            overlay_registry: None,
             alliances: Some(&HouseAlliances::default()),
+            ..Default::default()
         },
         None,
         None,
@@ -7059,11 +7148,7 @@ fn an_illegal_shot_is_still_in_range() {
         &target,
         sim.resolved_terrain.as_ref().unwrap(),
         None,
-        &crate::sim::combat::line_of_fire::LineOfFireInputs {
-            overlay_grid: None,
-            overlay_registry: None,
-            alliances: None,
-        },
+        &crate::sim::combat::line_of_fire::LineOfFireInputs::default(),
     ));
     let range = selected_weapon_range(
         tank,
@@ -7096,6 +7181,7 @@ fn v3_killing_aoe_emits_exactly_one_detonation_anim() {
          [MTNK]\nStrength=300\nArmor=heavy\nSpeed=6\nPrimary=V3W\n\n\
          [WEAK]\nStrength=10\nArmor=heavy\nSpeed=6\n\n\
          [V3W]\nDamage=200\nROF=20\nRange=10\nWarhead=V3WH\n\n\
+         [Animations]\n0=V3EXP\n\
          [V3WH]\nCellSpread=1\nPercentAtMax=1\nAnimList=V3EXP\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -7140,6 +7226,7 @@ fn gsi_04_11_death_weapon_anim_precedes_outer_detonation_anim() {
          [DEMOW]\nDamage=200\nROF=50\nRange=4\nWarhead=DEMOWH\n\n\
          [TANKHIT]\nCellSpread=0\nPercentAtMax=1\nAnimList=TANKEXP\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n\n\
+         [Animations]\n0=TANKEXP\n1=UCEXPLOD\n\
          [DEMOWH]\nCellSpread=2\nPercentAtMax=0.5\nAnimList=UCEXPLOD\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -7188,6 +7275,7 @@ fn an_inviso_death_weapon_scatters_its_anim_inside_the_receiver() {
          [DEMOP]\nInviso=yes\n\n\
          [TANKHIT]\nCellSpread=0\nPercentAtMax=1\nAnimList=TANKEXP\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n\n\
+         [Animations]\n0=TANKEXP\n1=UCEXPLOD\n\
          [DEMOWH]\nCellSpread=2\nPercentAtMax=0.5\nAnimList=UCEXPLOD\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -7252,6 +7340,7 @@ fn a_death_weapon_over_water_picks_its_anim_at_the_zero_location() {
          [DEMOW]\nDamage=200\nROF=50\nRange=4\nWarhead=DEMOWH\n\n\
          [TANKHIT]\nCellSpread=0\nConventional=yes\nAnimList=TANKEXP\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n\n\
+         [Animations]\n0=TANKEXP\n1=UCEXPLOD\n2=SPLASH\n\
          [DEMOWH]\nCellSpread=0\nConventional=yes\nAnimList=UCEXPLOD\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -7407,6 +7496,7 @@ fn inviso_weapon_rules(inviso: bool, with_anim: bool) -> RuleSet {
 fn shooter_rules(projectile: &str, warhead: &str) -> RuleSet {
     RuleSet::from_ini(&IniFile::from_str(&format!(
         "\
+[Animations]\n0=PIFF\n\
 [InfantryTypes]\n\n\
 [VehicleTypes]\n0=SHOOTER\n1=TARGET\n\n\
 [AircraftTypes]\n\n\
@@ -9827,6 +9917,33 @@ fn projectile_shrapnel_reads_the_bullets_location_not_its_impact() {
     assert_eq!(sim.scenario_rng.logical_state(), expected.logical_state());
 }
 
+/// Ares `BulletClass_Shrapnel_WeaponType1/2` (1001ABF0, hooks 0x46A5B2 and
+/// 0x46AA27) give each fragment its shrapnel weapon (+0x130), which the
+/// child's detonation (RadLevel, IvanBomb) reads; without Ares it has none.
+#[test]
+fn projectile_shrapnel_fragment_holds_its_weapon_only_in_ares() {
+    let rules = shrapnel_admission_rules(1);
+    let mut sim = shrapnel_world(
+        &rules,
+        vec![make_entity_owned(1, "MTNK", 2, 2, 100, "Soviet")],
+    );
+    let tree_type = sim.interner.intern("TREE01");
+    sim.terrain_objects.insert_constructed(
+        crate::sim::terrain_object::TerrainObjectState::for_test(900, tree_type, 5, 5),
+        false,
+    );
+    sim.terrain_objects.add_to_cell(900, (5, 5));
+    let fragments = commit_shrapnel_at_5_5(&mut sim, &rules);
+    let child = sim.interner.intern("CHILD");
+    assert_eq!(
+        fragments
+            .iter()
+            .map(|fragment| fragment.payload().installed_weapon())
+            .collect::<Vec<_>>(),
+        vec![rules.ares().then_some(child)]
+    );
+}
+
 /// The bullet cell's first ground object may be a tree, which is no
 /// building: shrapnel is thrown (`0x0046A3F8..0x0046A406`).
 #[test]
@@ -10457,6 +10574,37 @@ fn gsi_08_05_a_sonic_shot_carries_no_damage() {
     assert_eq!(store.get(2).expect("target").health.current(), 100);
 }
 
+/// Ares `ApplyDamage=yes` (TechnoClass_Fire_AllowDamage 1004A370, hook
+/// 0x6FE31C) keeps the Sonic shot's `Damage=`.
+#[test]
+fn ares_apply_damage_keeps_a_sonic_shots_damage() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let rules = RuleSet::from_ini(&IniFile::from_str(
+        "[VehicleTypes]\n0=DLPH\n1=TARGET\n\n\
+         [DLPH]\nStrength=200\nArmor=light\nSpeed=8\nPrimary=SonicZap\n\n\
+         [TARGET]\nStrength=100\nArmor=wood\n\n\
+         [SonicZap]\nDamage=4\nAmbientDamage=10\nROF=20\nRange=6\nWarhead=SonicWH\nIsSonic=yes\n\
+         ApplyDamage=yes\n\n\
+         [SonicWH]\nVerses=100%,100%,100%,100%,100%,100%,100%,100%,100%,0%,0%\n",
+    ))
+    .expect("Sonic fixture parses");
+    let mut store = EntityStore::new();
+    store.insert(make_entity_owned(1, "DLPH", 5, 5, 200, "Soviet"));
+    let _ = test_intern("TARGET");
+    store.insert(make_entity_owned(2, "TARGET", 8, 5, 100, "Americans"));
+    let mut interner = test_interner();
+    install_entity_attack_target_for_test(&mut store, 1, 2);
+    align_attackers_to_targets(&mut store);
+    tick(
+        &mut store,
+        &rules,
+        &mut interner,
+        0,
+        &mut SimRng::new(0x475A_5A4C),
+    );
+    assert_eq!(store.get(2).expect("target").health.current(), 96);
+}
+
 /// A vehicle installed in a Tank Bunker fires for `ftol(damage * f32
 /// BunkerDamageMultiplier)` (`0x006FE40B..0x006FE437`, a `+0x2E4` link on a
 /// non-building): the retail 1.3 turns a 90-damage gun into 116 (the single
@@ -10961,6 +11109,35 @@ fn gsi_08_05_rearm_frames_match_the_original() {
     }
 }
 
+/// Ares TechnoClass_Fire_BerserkROFMultiplier (Ares.dll 1004A3D0, hook
+/// 0x6FF28F): a berserk firer's rearm is its GetROF value times the type's
+/// `Berserk.ROFMultiplier`, else `[CombatDamage] BerserkROFMultiplier`,
+/// truncated toward zero.
+#[test]
+fn ares_berserk_rearm_takes_the_type_or_rules_multiplier() {
+    let _ares = crate::rules::ares_switch::read_ares_way(true);
+    let rules = RuleSet::from_ini(&IniFile::from_str(
+        "[CombatDamage]\nBerserkROFMultiplier=0.75\n[VehicleTypes]\n0=OWN\n1=RULES\n\
+         [OWN]\nBerserk.ROFMultiplier=0.25\n[RULES]\nStrength=1\n",
+    ))
+    .unwrap();
+    let global = rules.ares_techno_combat().berserk_rof_multiplier();
+    let rearm = |name: &str, rof: i32| {
+        let multiplier = rules
+            .object(name)
+            .unwrap()
+            .techno_combat()
+            .combat()
+            .berserk_rof_multiplier(global);
+        super::world_fire::ares_berserk_rearm_frames(rof, Some(multiplier))
+    };
+    assert_eq!(
+        (rearm("OWN", 101), rearm("RULES", 101), rearm("RULES", -101)),
+        (25, 75, -75)
+    );
+    assert_eq!(super::world_fire::ares_berserk_rearm_frames(101, None), 101);
+}
+
 /// `TechnoClass::FireAt 0x006FE9FE`: EVERY launch speed is clamped to half the
 /// straight-line distance to the target before the homing/vertical override.
 /// For a `ROT=0` shell the speed clamped is `WeaponTypeClass::GetSpeed`'s
@@ -11259,6 +11436,7 @@ fn gsi_05_14_a_dying_building_uses_its_own_debris_anims() {
          [MTNK]\nStrength=300\nArmor=heavy\nSpeed=6\nCost=700\nPrimary=105mm\n\
          [HTNK]\nStrength=1\nArmor=heavy\nSpeed=4\nCost=900\nPrimary=105mm\n\
          MinDebris=3\nMaxDebris=4\nDebrisAnims=DBRI-WM1,DBRI-WM2\n\
+         [Animations]\n0=DBRI-WM1\n1=DBRI-WM2\n\
          [105mm]\nDamage=65\nROF=50\nRange=6\nWarhead=AP\n\
          [AP]\nVerses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -11458,7 +11636,7 @@ fn gsi_08_08_special_arm_suppresses_damage_but_keeps_the_detonation_tail() {
          [AircraftTypes]\n\
          [BuildingTypes]\n\
          [TARGET]\nStrength=200\nArmor=heavy\n\
-         [Warheads]\n0=Controller\n1=Plain\n\
+         [Warheads]\n0=Controller\n1=Plain\n[Animations]\n0=YURICNTL\n\
          [Controller]\nMindControl=yes\nAnimList=YURICNTL\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n\
          [Plain]\nAnimList=YURICNTL\n\
@@ -11555,7 +11733,7 @@ fn clusters_scatter_around_the_impact() {
          [LAUNCHER]\nStrength=100\nPrimary=ClusterGun\n\
          [ClusterGun]\nDamage=10\nProjectile=ClusterP\nWarhead=Blast\n\
          [ClusterP]\nCluster=5\n\
-         [Warheads]\n0=Blast\n\
+         [Warheads]\n0=Blast\n[Animations]\n0=EXPLOSML\n\
          [Blast]\nAnimList=EXPLOSML\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -11622,7 +11800,7 @@ fn gsi_08_33_direct_rocker_only_claims_a_vehicle_target() {
          [BuildingTypes]\n\
          [TARGET]\nStrength=200\nArmor=heavy\n\
          [FOOT]\nStrength=200\nArmor=none\n\
-         [Warheads]\n0=Rocker\n\
+         [Warheads]\n0=Rocker\n[Animations]\n0=YURICNTL\n\
          [Rocker]\nDirectRocker=yes\nAnimList=YURICNTL\n\
          Verses=100%,100%,100%,100%,100%,100%,100%,100%,100%,100%,100%\n",
     ))
@@ -11805,7 +11983,10 @@ fn phobos_radiation_color_ignores_the_theater() {
 
 /// The retail owner keeps native `RadSite65B5EA..65B684`: on SNOW the light
 /// substitutes signed -128 for red and blue and keeps only `RadColor`'s
-/// green, so the theater decides which channels the field uses.
+/// green, so the theater decides which channels the field uses. Ares's
+/// RadSiteClass_Radiate_UnhardcodeSnow (10056DB0, hook 0x65B5FB) jumps past
+/// this substitution; `radiation::ares_radiation_keeps_rad_color_on_snow`
+/// covers a game where Ares plays.
 #[cfg(not(feature = "phobos"))]
 #[test]
 fn retail_snow_theater_substitutes_red_and_blue() {

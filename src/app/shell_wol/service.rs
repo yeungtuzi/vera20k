@@ -82,14 +82,6 @@ pub(crate) struct WolLoginAccepted {
     pub(crate) motd: String,
 }
 
-/// The game's own message of the day for an accepted login, used when the
-/// lobby sends no operator welcome: a welcome, and how to page with the chat's
-/// `TXT_PAGE_COMMAND`, since the online screens have no Page button.
-pub(super) fn vera_motd(state: &AppState) -> String {
-    let page = App::csf_label(state, "TXT_PAGE_COMMAND", "TXT_PAGE_COMMAND");
-    crate::i18n::tr_fill("VERA:OnlineWelcome", &[("page", &page)])
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum WolServiceRequest {
     /// `WOL__EnsureWolapiObject` `0x00786390`.
@@ -199,12 +191,18 @@ pub(crate) enum WolServiceRequest {
         matchbot: String,
         request: super::quick_match::MatchRequest,
     },
-    /// VERA's chat translation of a received line into `[VERA]
-    /// TranslateChat=`'s language; [`super::translation`] shows the reply.
+    /// VERA's chat translation of a received line into the chosen language;
+    /// [`super::translation`] shows the reply.
     Translate {
         text: Vec<u16>,
         line: super::translation::TranslatedLine,
     },
+    /// VERA online: the running matches the player can watch, asked with
+    /// the game list; the answer is [`WolServiceEvent::Matches`].
+    ListMatches,
+    /// VERA online: the lobby's `watch` of a listed match. Its grant is the
+    /// live service's; a refusal is [`WolServiceEvent::WatchRefused`].
+    Watch { match_id: String },
 }
 
 impl std::fmt::Debug for WolServiceRequest {
@@ -255,6 +253,22 @@ pub(crate) struct WolHighScoreRecord {
     pub(crate) rank: u32,
     /// `+0x14`: one bit per finished co-op campaign.
     pub(crate) coop: u32,
+}
+
+/// VERA online: one running match the player can watch
+/// (docs/lobby-protocol.md "Watching"), with what the game list shows and
+/// who plays it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WolMatch {
+    /// What `watch` names.
+    pub(crate) match_id: String,
+    /// The room's name; empty when it has none.
+    pub(crate) name: String,
+    pub(crate) map: String,
+    pub(crate) watchers: u32,
+    pub(crate) max_watchers: u32,
+    /// The playing humans.
+    pub(crate) names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,6 +407,12 @@ pub(crate) enum WolServiceEvent {
         name: String,
         banned: bool,
     },
+    /// VERA online: the matches the player can watch; none from a lobby
+    /// from before watching.
+    Matches(Vec<WolMatch>),
+    /// VERA online: the lobby refused a [`WolServiceRequest::Watch`] with
+    /// this code ([`super::lobby::WATCH_UNKNOWN_MATCH`] and its siblings).
+    WatchRefused(u32),
 }
 
 /// The server status that completes the list wait with event 1, and that
@@ -1027,7 +1047,9 @@ pub(crate) fn service_event(state: &mut AppState, event: WolServiceEvent) {
         | WolServiceEvent::PlayerReady { .. }
         | WolServiceEvent::MapStatus { .. }
         | WolServiceEvent::PreviewRequested { .. }
-        | WolServiceEvent::Created(_)) => {
+        | WolServiceEvent::Created(_)
+        | WolServiceEvent::Matches(_)
+        | WolServiceEvent::WatchRefused(_)) => {
             super::lobby::service_event(state, event);
             answer_unavailable(state);
             return;
@@ -1481,7 +1503,7 @@ pub(super) fn poll_wait(state: &mut AppState) -> Option<Instant> {
     [limit, reveal].into_iter().flatten().min()
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_app))]
 mod tests {
     use super::*;
 
@@ -1544,8 +1566,8 @@ mod tests {
         let column = ShellSlideKind::WolLogin.column(9, Some(modern));
         assert_eq!(
             (column.top_buttons, column.bottom_button),
-            (5, true),
-            "Login, Play as Guest and the three account buttons"
+            (4, true),
+            "Play and the three account buttons"
         );
         visit.page = WolPage::Login(Box::new(WolLoginState::open(&mut globals, &[])));
         let native = visit.login().unwrap().policy.page_spec();

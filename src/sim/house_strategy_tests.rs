@@ -164,6 +164,8 @@ fn post_map_ai_hate_delays_defer_enemy_selection_across_save_load() {
         &sim.house_alliances,
         &mut sim.houses,
         owner,
+        rules.ares_form(),
+        false,
     );
     assert_eq!(sim.houses[&owner].enemy_house(), None);
 
@@ -182,6 +184,8 @@ fn post_map_ai_hate_delays_defer_enemy_selection_across_save_load() {
         &restored.house_alliances,
         &mut restored.houses,
         owner,
+        rules.ares_form(),
+        false,
     );
     assert_eq!(restored.houses[&owner].enemy_house(), Some(names[1]));
 }
@@ -648,7 +652,17 @@ fn gsi_04_05_update_anger_nodes_wraps_and_selects_first_positive_eligible_peer()
         anger.insert(second, 7);
     }
 
-    update_anger_nodes(&mut houses, &alliances, &interner, owner, first, 0);
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        first,
+        0,
+        true,
+        false,
+        false,
+    );
     assert_eq!(houses[&owner].enemy_house(), Some(first));
 
     houses
@@ -656,7 +670,17 @@ fn gsi_04_05_update_anger_nodes_wraps_and_selects_first_positive_eligible_peer()
         .unwrap()
         .set_enemy_house_for_test(None);
     let missing_score = houses[&owner].grudge_scores()[&missing];
-    update_anger_nodes(&mut houses, &alliances, &interner, owner, missing, 5);
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        missing,
+        5,
+        true,
+        false,
+        false,
+    );
     assert_eq!(houses[&owner].grudge_scores()[&missing], missing_score);
     assert_eq!(
         houses[&owner].enemy_house(),
@@ -674,11 +698,31 @@ fn gsi_04_05_update_anger_nodes_wraps_and_selects_first_positive_eligible_peer()
         .unwrap()
         .grudge_scores_mut_for_test()
         .insert(second, 1);
-    update_anger_nodes(&mut houses, &alliances, &interner, owner, first, 1);
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        first,
+        1,
+        true,
+        false,
+        false,
+    );
     assert_eq!(houses[&owner].grudge_scores()[&first], i32::MIN);
     assert_eq!(houses[&owner].enemy_house(), Some(second));
 
-    update_anger_nodes(&mut houses, &alliances, &interner, owner, unregistered, 5);
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        unregistered,
+        5,
+        true,
+        false,
+        false,
+    );
     assert!(!houses[&owner].grudge_scores().contains_key(&unregistered));
     assert_eq!(houses[&owner].enemy_house(), Some(second));
     houses
@@ -686,9 +730,66 @@ fn gsi_04_05_update_anger_nodes_wraps_and_selects_first_positive_eligible_peer()
         .unwrap()
         .grudge_scores_mut_for_test()
         .insert(second, 0);
-    update_anger_nodes(&mut houses, &alliances, &interner, owner, owner, 5);
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        owner,
+        5,
+        true,
+        false,
+        false,
+    );
     assert!(!houses[&owner].grudge_scores().contains_key(&owner));
     assert_eq!(houses[&owner].enemy_house(), None);
+}
+
+/// Ares 10023FB0 (hook 0x504796): outside a campaign a `MultiplayPassive`
+/// peer takes no anger, but the rescan still runs; a campaign keeps it.
+#[test]
+fn ares_passive_peer_takes_no_anger_outside_a_campaign() {
+    let mut interner = StringInterner::new();
+    let owner = interner.intern("OWNER");
+    let passive = interner.intern("PASSIVE");
+    let enemy = interner.intern("ENEMY");
+    let mut passive_house = house(passive, 1);
+    passive_house.set_multiplay_passive_for_test(true);
+    let mut houses = [house(owner, 0), passive_house, house(enemy, 2)]
+        .into_iter()
+        .collect::<crate::sim::houses::Houses>();
+    houses
+        .get_mut(&owner)
+        .unwrap()
+        .grudge_scores_mut_for_test()
+        .insert(enemy, 3);
+    let alliances = HouseAlliances::default();
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        passive,
+        9,
+        true,
+        true,
+        false,
+    );
+    assert!(!houses[&owner].grudge_scores().contains_key(&passive));
+    assert_eq!(houses[&owner].enemy_house(), Some(enemy));
+    update_anger_nodes(
+        &mut houses,
+        &alliances,
+        &interner,
+        owner,
+        passive,
+        9,
+        false,
+        true,
+        false,
+    );
+    assert_eq!(houses[&owner].grudge_scores().get(&passive), Some(&9));
+    assert_eq!(houses[&owner].enemy_house(), Some(passive));
 }
 
 #[test]
@@ -717,6 +818,9 @@ fn gsi_04_05_sparse_zero_updates_preserve_representation_and_rescan() {
         owner,
         first,
         0,
+        true,
+        false,
+        false,
     );
     assert!(!houses[&owner].grudge_scores().contains_key(&first));
     assert_eq!(houses[&owner].enemy_house(), Some(second));
@@ -737,6 +841,9 @@ fn gsi_04_05_sparse_zero_updates_preserve_representation_and_rescan() {
         owner,
         first,
         -5,
+        true,
+        false,
+        false,
     );
     assert_eq!(houses[&owner].grudge_scores().get(&first), Some(&0));
     assert_eq!(houses[&owner].enemy_house(), Some(second));
@@ -815,7 +922,6 @@ fn all_to_hunt_override_is_persistent_and_follows_designated_enemy() {
     assert!(house.strategy_emergency().all_to_hunt_bias());
 }
 
-#[cfg(feature = "phobos")]
 fn last_legs_fixture(general: &str) -> (Simulation, RuleSet, InternedId, u64) {
     let mut rules = RuleSet::from_ini(&IniFile::from_str(&format!(
         "[General]\n{general}\n[InfantryTypes]\n0=FOOT\n[VehicleTypes]\n0=WHEELS\n\
@@ -837,7 +943,6 @@ fn last_legs_fixture(general: &str) -> (Simulation, RuleSet, InternedId, u64) {
     (sim, rules, owner, plain)
 }
 
-#[cfg(feature = "phobos")]
 fn last_legs_pass(sim: &mut Simulation, rules: &RuleSet, owner: InternedId) {
     building_strategy(
         sim,
@@ -850,7 +955,6 @@ fn last_legs_pass(sim: &mut Simulation, rules: &RuleSet, owner: InternedId) {
 
 /// Phobos `[General] AIFireSale=` and `AIAllToHunt=` gate the no-factory
 /// block's two calls independently, and a delayed sale still hunts.
-#[cfg(feature = "phobos")]
 #[test]
 fn ai_last_legs_switches_gate_the_sale_and_the_hunt() {
     let (mut sim, rules, owner, plain) = last_legs_fixture("AIFireSale=no");
@@ -873,7 +977,6 @@ fn ai_last_legs_switches_gate_the_sale_and_the_hunt() {
 
 /// Phobos `[General] AIFireSaleDelay=` arms a per-house timer on the first
 /// trigger and sells only once it completes; All_To_Hunt runs meanwhile.
-#[cfg(feature = "phobos")]
 #[test]
 fn ai_fire_sale_delay_defers_only_the_sale() {
     let (mut sim, rules, owner, plain) = last_legs_fixture("AIFireSaleDelay=100");
@@ -930,4 +1033,77 @@ fn non_bincode_missing_house_field_uses_native_constructor_defaults() {
         *restored.strategy_timer(),
         crate::sim::house_state::strategy_timer_at_construction()
     );
+}
+
+/// Three houses with base centres: H0 far from H1, H2 beside it.
+fn houses_with_bases() -> (Simulation, Vec<InternedId>) {
+    let (mut sim, names) = houses(true, 3);
+    for (&name, cell) in names.iter().zip([(100, 100), (20, 20), (25, 20)]) {
+        sim.houses
+            .get_mut(&name)
+            .unwrap()
+            .set_base_center_for_test(Some(cell));
+    }
+    (sim, names)
+}
+
+#[test]
+fn ai_nearest_enemy_key_reads_off_by_default() {
+    let off = RuleSet::from_ini(&IniFile::from_str("[General]\n")).unwrap();
+    assert!(!off.general.ai_nearest_enemy);
+    let on = RuleSet::from_ini(&IniFile::from_str("[General]\nAINearestEnemy=yes\n")).unwrap();
+    assert!(on.general.ai_nearest_enemy);
+}
+
+#[test]
+fn ai_nearest_enemy_search_picks_the_nearest_base_instead_of_the_first_house() {
+    for (nearest, expected) in [(false, 0), (true, 2)] {
+        let (mut sim, names) = houses_with_bases();
+        pick_enemy(
+            &sim.interner,
+            &sim.session,
+            &sim.house_alliances,
+            &mut sim.houses,
+            names[1],
+            false,
+            nearest,
+        );
+        assert_eq!(
+            sim.houses[&names[1]].enemy_house(),
+            Some(names[expected]),
+            "AINearestEnemy={nearest}"
+        );
+    }
+}
+
+#[test]
+fn ai_nearest_enemy_breaks_equal_anger_by_distance_and_keeps_higher_anger() {
+    let (mut sim, names) = houses_with_bases();
+    let owner = names[1];
+    {
+        let anger = sim
+            .houses
+            .get_mut(&owner)
+            .unwrap()
+            .grudge_scores_mut_for_test();
+        anger.insert(names[0], 1);
+        anger.insert(names[2], 1);
+    }
+    let rescan = |sim: &mut Simulation, peer, delta, nearest| {
+        update_anger_nodes(
+            &mut sim.houses,
+            &sim.house_alliances,
+            &sim.interner,
+            owner,
+            peer,
+            delta,
+            true,
+            false,
+            nearest,
+        );
+        sim.houses[&owner].enemy_house()
+    };
+    assert_eq!(rescan(&mut sim, names[0], 0, false), Some(names[0]));
+    assert_eq!(rescan(&mut sim, names[0], 0, true), Some(names[2]));
+    assert_eq!(rescan(&mut sim, names[0], 5, true), Some(names[0]));
 }

@@ -25,6 +25,45 @@ use crate::sim::pathfinding::zone_map::ZoneQueryCell;
 use crate::sim::world::FrameEffects;
 use crate::sim::world::Simulation;
 
+/// A `[General]` harvester value one of Ares' `Hooks.Harvester.cpp` hooks
+/// replaces with a TechnoTypeExt `Harvester.*` key of the type it names
+/// (+0x61C..+0x63C, `rules::ares_tiberium`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HarvesterKey {
+    /// `Harvester.LongScan` (leptons).
+    LongScan,
+    /// `Harvester.ShortScan` (leptons).
+    ShortScan,
+    /// `Harvester.ScanCorrection` (leptons).
+    ScanCorrection,
+    /// `Harvester.TooFarDistance` (cells).
+    TooFarDistance,
+    /// `Harvester.KickDelay` (frames).
+    KickDelay,
+}
+
+/// `rules_value`, or in a game read the Ares way `object`'s `Harvester.*`
+/// override of it when set (Nullable `.Get(rules_value)`).
+pub(crate) fn harvester_value(
+    object: Option<&crate::rules::object_type::ObjectType>,
+    key: HarvesterKey,
+    rules_value: i32,
+) -> i32 {
+    // Runs in every game: only Rules read the Ares way set a `Harvester.*`
+    // key (TechnoTypeExt `1003DFB0`), and an unset one answers `rules_value`.
+    if let Some(object) = object {
+        let ext = object.techno_combat().tiberium();
+        return match key {
+            HarvesterKey::LongScan => ext.harvester_long_scan(rules_value),
+            HarvesterKey::ShortScan => ext.harvester_short_scan(rules_value),
+            HarvesterKey::ScanCorrection => ext.harvester_scan_correction(rules_value),
+            HarvesterKey::TooFarDistance => ext.harvester_too_far_distance(rules_value),
+            HarvesterKey::KickDelay => ext.harvester_kick_delay(rules_value),
+        };
+    }
+    rules_value
+}
+
 /// A `[General]` scan radius in leptons as Mission_Harvest hands it on:
 /// `CDQ; AND EDX,0xFF; ADD EAX,EDX; SAR EAX,8`, the signed division by 256
 /// (`0x0073E851`, `0x0073EAA6`).
@@ -394,7 +433,7 @@ fn is_cell_harvestable(
     (code == 0).then_some(cell)
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_sim_h_o))]
 mod tests {
     use super::*;
 
@@ -416,7 +455,7 @@ mod tests {
             let input = &row["input"];
             let terrain = native::terrain(input);
             let mut sim = Simulation::new();
-            sim.zone_grid = Some(native::zones(&terrain, row));
+            sim.zone_grid = Some(native::zones(&terrain, row).into());
             sim.resolved_terrain = Some(terrain);
             sim.substrate
                 .entities

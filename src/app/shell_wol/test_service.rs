@@ -1,6 +1,6 @@
 //! VERA's offline WOL test service: a developer stand-in behind the same
-//! request/event boundary a real service will use, chosen by the Options
-//! page's `[VERA] WolTestService=` box. It is not gamemd behavior: it lets
+//! request/event boundary a real service will use, chosen by
+//! `[VERA] WolTestService=`. It is not gamemd behavior: it lets
 //! the Internet screens (login `0x10F`, lobby `0x113`, setup C2/C9) be
 //! opened and clicked without a server.
 //!
@@ -125,6 +125,10 @@ fn answer_setup(state: &mut AppState, request: NetworkSetupRequest) {
         {
             log::warn!("WOL test service: host options refused: {error:#}");
         }
+        return;
+    }
+    // The stand-in lobby rates nobody, so its balance moves nobody.
+    if request == NetworkSetupRequest::Balance {
         return;
     }
     // 0x0078F000: the stand-in server keeps the host's new record.
@@ -376,13 +380,8 @@ fn answer(state: &mut AppState, request: WolServiceRequest) {
             service_event(state, WolServiceEvent::NetStatus(SERVER_STATUS_READY));
             WolServiceEvent::ServerList(Ok(servers()))
         }
-        // VERA's own message of the day, then this service's.
         WolServiceRequest::Connect { .. } => WolServiceEvent::Login(Ok(WolLoginAccepted {
-            motd: format!(
-                "{}\n{}",
-                super::service::vera_motd(state),
-                crate::i18n::tr(MOTD)
-            ),
+            motd: crate::i18n::tr(MOTD),
         })),
         WolServiceRequest::ListChannels { kind, .. } => WolServiceEvent::Channels {
             kind,
@@ -535,6 +534,11 @@ fn answer(state: &mut AppState, request: WolServiceRequest) {
         }
         // VERA online's account requests: the stand-in lobby accepts each.
         WolServiceRequest::Account(_) => WolServiceEvent::Account(Ok(())),
+        // Nobody plays, so no match can be watched.
+        WolServiceRequest::ListMatches => WolServiceEvent::Matches(Vec::new()),
+        WolServiceRequest::Watch { .. } => {
+            WolServiceEvent::WatchRefused(super::lobby::WATCH_UNKNOWN_MATCH)
+        }
         // Nothing to cancel or deliver: nobody is online.
         WolServiceRequest::SetLocale(_)
         | WolServiceRequest::LeaveChannel
@@ -908,7 +912,7 @@ fn store_credential(stored: &mut Vec<WolCredential>, nickname: String, password:
     stored.sort_by_key(|stored| stored.slot);
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_app))]
 mod tests {
     use super::*;
 

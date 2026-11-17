@@ -5,6 +5,7 @@
 
 use super::input::precedence::{ModalPage, ScreenPage};
 use super::loading::transitions;
+use super::match_runtime::redraw_gate::ProbeVerdict;
 use super::{
     ActiveEventLoop, App, AppState, GameScreen, Instant, Result, frontend::startup_splash, render,
     sim_tick,
@@ -35,7 +36,7 @@ pub(super) struct RuntimeServiceResult {
     /// Offset selected for this service's draw: normal Input result, the
     /// paused render-before-Input snapshot, or the last presented freeze value.
     pub(super) screen_shake_offset: Option<[i32; 2]>,
-    completed_frames: u32,
+    pub(super) completed_frames: u32,
     last_frame_completed: bool,
 }
 
@@ -44,7 +45,8 @@ pub(super) enum FrameRenderOutcome {
     Presented,
     Unavailable,
     Deferred,
-    /// A probe found the presented picture still standing and drew nothing.
+    /// A probe drew nothing: the presented picture still stands, or the draw
+    /// limits hold the next one.
     Unchanged,
 }
 
@@ -63,8 +65,14 @@ pub(super) enum FramePass {
 /// including the command bar beneath the tactical viewport.
 fn shake_central_rect(state: &AppState, target: &wgpu::Texture) -> [u32; 4] {
     let source_height = state.render_height();
+    // The strip spans what the column leaves: left of it, right of a column
+    // on the left, or the whole frame under a floating one.
     let sidebar_frame = state.sidebar_frame();
-    let central_source_width = sidebar_frame.column().0;
+    let (_, _, tactical_width, _) = sidebar_frame.tactical_rect();
+    let (central_source_x, central_source_width) = (
+        sidebar_frame.tactical_rect().0,
+        tactical_width.min(state.render_width()),
+    );
 
     if let Some(geometry) = state
         .renderer
@@ -73,20 +81,21 @@ fn shake_central_rect(state: &AppState, target: &wgpu::Texture) -> [u32; 4] {
         .map(|pass| pass.geometry())
     {
         let (frame_width, frame_height) = geometry.frame_size();
-        let central_width = central_source_width
-            .saturating_mul(geometry.percent)
-            .saturating_div(100);
+        let scaled = |source: u32| source.saturating_mul(geometry.percent).saturating_div(100);
+        let central_x = scaled(central_source_x).min(frame_width);
+        let central_width = scaled(central_source_width);
         [
-            geometry.origin.0,
+            geometry.origin.0 + central_x,
             geometry.origin.1,
-            central_width.min(frame_width),
+            central_width.min(frame_width - central_x),
             frame_height.min(target.height().saturating_sub(geometry.origin.1)),
         ]
     } else {
+        let central_x = central_source_x.min(target.width());
         [
+            central_x,
             0,
-            0,
-            central_source_width.min(target.width()),
+            central_source_width.min(target.width() - central_x),
             source_height.min(target.height()),
         ]
     }
@@ -110,6 +119,78 @@ fn apply_screen_shake(
 }
 
 impl App {
+    /// Move the simulation's pending radar-terrain marks into the minimap's
+    /// backlog before a draw. While a tick runs on the simulation thread the
+    /// marks stay with it: that tick's tail hands them over
+    /// ([`sim_tick::drain_radar_terrain_marks`]) with the frame they belong
+    /// to, and taking them here would wait for the tick.
+    fn drain_radar_terrain_marks(state: &mut AppState) {
+        if !state.match_state.sim_runtime.is_lent() {
+            sim_tick::drain_radar_terrain_marks(&mut state.match_state);
+        }
+    }
+
+    /// docs/sim-thread.md: once a pass finds back the tick that held the
+    /// window events, finish that tick and replay them in order, so they act
+    /// on its world before the pass services the next frame.
+    pub(super) fn release_held_events(&mut self, event_loop: &ActiveEventLoop) {
+        if self.held_window_events.is_empty() {
+            return;
+        }
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if !state.match_state.sim_runtime.pass_may_run(false) {
+            return;
+        }
+        sim_tick::finish_threaded_frame(state);
+        state.platform.window_events_held = false;
+        for (window, event) in std::mem::take(&mut self.held_window_events) {
+            winit::application::ApplicationHandler::window_event(self, event_loop, window, event);
+        }
+    }
+
+    /// When the local timer has the match's next frame due, for the frame
+    /// loop's wake (`LocalFramePacer::until_next_frame`): now or earlier once
+    /// it is due. `None` off the battlefield, at GameSpeed 0, before the
+    /// first frame, and in sequenced online play, whose frames the relay's
+    /// clock admits.
+    pub(super) fn next_local_frame_due(state: &AppState, now: Instant) -> Option<Instant> {
+        if state.frontend.screen != GameScreen::InGame
+            || state
+                .match_state
+                .live_network
+                .as_ref()
+                .is_some_and(|live| live.uses_sequenced_lockstep())
+        {
+            return None;
+        }
+        let (game_speed, network_fps) = sim_tick::local_pacing_inputs(state);
+        state
+            .platform
+            .frame_pacer
+            .until_next_frame(
+                crate::app::match_runtime::frame_pacer::wall_clock_ms(),
+                game_speed,
+                network_fps,
+            )
+            .map(|left| now + left)
+    }
+
+    /// When a loop that services the match without drawing should wake:
+    /// after [`SERVICE_WAKE`], or sooner for a frame the local timer has due
+    /// before then ([`Self::next_local_frame_due`]). One already due moves
+    /// nothing: the pass that just ran did not admit it, and waking for it
+    /// again would spin.
+    ///
+    /// [`SERVICE_WAKE`]: crate::app::match_runtime::frame_pacer::SERVICE_WAKE
+    pub(super) fn match_service_wake(state: &AppState, now: Instant) -> Instant {
+        let service = now + crate::app::match_runtime::frame_pacer::SERVICE_WAKE;
+        Self::next_local_frame_due(state, now)
+            .filter(|due| *due > now)
+            .map_or(service, |due| due.min(service))
+    }
+
     /// Service the match runtime for one pass: the outcome voice wait, the
     /// scenario exit cascade, the quit cascade, the audio pump and, when
     /// admitted, each simulation advance due by now (only the first without
@@ -117,22 +198,52 @@ impl App {
     /// hidden-window service loop in `about_to_wait`, so the world keeps the
     /// same cadence whether or not a frame is drawn. Returns quit state and
     /// the pre-Logic Main_Tick admission for its later consumers.
+    /// `wait_for_tick` makes a desktop pass wait for a tick still on the
+    /// simulation thread instead of passing beside it, for captures whose
+    /// pictures must each follow a finished tick.
     pub(super) fn service_match_runtime(
         state: &mut AppState,
         event_loop: &ActiveEventLoop,
         simulation_allowed: bool,
         catch_up_allowed: bool,
+        wait_for_tick: bool,
     ) -> RuntimeServiceResult {
         if state.persistence.pending_load.is_some() {
             return RuntimeServiceResult::default();
         }
+        // No pass waits for a tick still on the simulation thread
+        // (docs/sim-thread.md). This one admits no frame and takes nothing
+        // from the world: the camera and the presentation services run as in
+        // a pass the pacer does not admit, and it draws the frame published
+        // for that tick. No Input, so the screen shake stands as last
+        // presented. The tick's end wakes the pass that finishes it.
+        if !state.match_state.sim_runtime.pass_may_run(wait_for_tick) {
+            sim_tick::service_beside_tick(state);
+            return RuntimeServiceResult {
+                screen_shake_offset: (state.frontend.screen == GameScreen::InGame).then(|| {
+                    state
+                        .match_state
+                        .match_presentation
+                        .screen_shake
+                        .service_offset_snapshot(None, false)
+                }),
+                ..RuntimeServiceResult::default()
+            };
+        }
         let started = Instant::now();
         let mut result = RuntimeServiceResult::default();
+        // A watcher catching up plays minutes of its match at once, muted,
+        // with a longer budget a picture (`LocalFramePacer::permits_catch_up`).
+        let watcher_catching_up = crate::app::match_runtime::watching::catching_up(
+            state,
+            crate::app::match_runtime::frame_pacer::wall_clock_ms() as u32,
+        );
         let restoring = state
             .match_state
             .live_network
             .as_ref()
-            .is_some_and(|live| live.restoring_match());
+            .is_some_and(|live| live.restoring_match())
+            || watcher_catching_up;
         let profile = &state.persistence.options_profile;
         let (sound, voice) = (
             f64::from(profile.sound_volume),
@@ -141,12 +252,16 @@ impl App {
         state.audio.mute_for_restore(restoring, sound, voice);
         let mut attempts = 0;
         loop {
-            if result.last_frame_completed {
-                // Observe each catch-up frame, so interpolation keeps
-                // consecutive endpoints instead of snapping at the jump.
-                crate::app::presentation::interpolation::prepare(state, false);
+            if catch_up_allowed {
+                // The pass decides from this whether its frame is the
+                // service's last (`LocalFramePacer::another_pass_follows`).
+                state.platform.frame_pacer.begin_service_pass(
+                    started,
+                    attempts,
+                    watcher_catching_up,
+                );
             }
-            let before = state.match_state.sim_runtime.as_ref().map(|runtime| {
+            let before = state.match_state.sim_runtime.runtime().map(|runtime| {
                 (
                     runtime.simulation.session().tick(),
                     runtime.simulation.session().binary_frame(),
@@ -156,7 +271,7 @@ impl App {
             result.main_tick_admitted |= pass.main_tick_admitted;
             result.screen_shake_offset = pass.screen_shake_offset;
             result.quit_requested |= pass.quit_requested;
-            let after = state.match_state.sim_runtime.as_ref().map(|runtime| {
+            let after = state.match_state.sim_runtime.runtime().map(|runtime| {
                 (
                     runtime.simulation.session().tick(),
                     runtime.simulation.session().binary_frame(),
@@ -179,11 +294,15 @@ impl App {
                 || !crate::app::match_runtime::frame_pacer::LocalFramePacer::permits_catch_up(
                     attempts,
                     started.elapsed(),
+                    watcher_catching_up,
                 )
+                // A tick is running beside this thread: draw. Another pass
+                // would only find it running; its end wakes the next one.
+                || state.match_state.sim_runtime.is_lent()
             {
                 break;
             }
-            let Some(runtime) = state.match_state.sim_runtime.as_ref() else {
+            let Some(runtime) = state.match_state.sim_runtime.runtime() else {
                 break;
             };
             let session = runtime.simulation.session();
@@ -248,6 +367,7 @@ impl App {
                 }
             }
         }
+        state.platform.frame_pacer.end_service();
         crate::app::match_runtime::network_quality::observe_pass(state);
         result
     }
@@ -260,6 +380,9 @@ impl App {
         event_loop: &ActiveEventLoop,
         simulation_allowed: bool,
     ) -> RuntimeServiceResult {
+        // A tick the simulation thread ran since the last pass ends here,
+        // before anything in this pass reads or routes its result.
+        sim_tick::finish_threaded_frame(state);
         let mut main_tick_admitted = false;
         // GScreen Input reads the current native frame parity but does not
         // advance it. Hidden background service still owns Input while the
@@ -267,7 +390,7 @@ impl App {
         let network_wait_pending = state
             .match_state
             .sim_runtime
-            .as_ref()
+            .runtime()
             .is_some_and(|rt| rt.simulation.pending_network_wait());
         let in_game = state.frontend.screen == GameScreen::InGame;
         // Wait_For_Players still enters GScreen Input at 0x006485B7 and
@@ -280,7 +403,7 @@ impl App {
             state
                 .match_state
                 .sim_runtime
-                .as_ref()
+                .runtime()
                 .map(|rt| rt.simulation.session().binary_frame())
         });
         let screen_shake_offset = if in_game {
@@ -354,9 +477,12 @@ impl App {
                     );
                     Self::drive_scenario_exit(state, scenario_now_ms);
                 }
+                // A stopped frame leaves no exit or outcome to drive: Stop
+                // always returns to the shell, or the box would reopen.
                 if matches!(state.frontend.screen, GameScreen::InGame)
-                    && state.match_state.scenario_exit.is_none()
-                    && state.match_state.scenario_outcome.is_none()
+                    && (frame_stopped
+                        || (state.match_state.scenario_exit.is_none()
+                            && state.match_state.scenario_outcome.is_none()))
                 {
                     // ProcessNetwork6475F0 clears GameActive at64826F;
                     // Main_Game55D347 returns directly to shell cleanup.
@@ -501,7 +627,7 @@ impl App {
         let network_frame_pending = state
             .match_state
             .sim_runtime
-            .as_ref()
+            .runtime()
             .is_some_and(|rt| rt.simulation.pending_network_wait());
         // Main_Game48CE8A..48CEA8 runs the router 55CFD0 after every
         // Main_Tick and leaves the loop once it routes, so no frame follows a
@@ -585,7 +711,7 @@ impl App {
             state.match_state.live_network.as_ref().filter(|live| {
                 live.uses_sequenced_lockstep() && !live.has_terminal_network_error()
             })?;
-        let sim = &state.match_state.sim_runtime.as_ref()?.simulation;
+        let sim = &state.match_state.sim_runtime.runtime()?.simulation;
         if sim.session().scenario_paused()
             || sim.pending_network_wait()
             || sim.pending_network_interruption().is_some()
@@ -651,33 +777,31 @@ impl App {
             ScreenPage::InGameShell(InGameMenuState::SavedGame(_)) => {
                 shell::render_saved_game_shell(state, encoder, destination)
             }
-            _ => shell::render_in_game_options_shell(state, encoder, destination),
+            // No other state draws the active-game shell.
+            _ => Ok(()),
         }
     }
 
     /// The one owner of the window's own cursor after the startup splash, set
     /// after each frame's draw. gamemd's WWMouse constructor (`0x007B8730`)
     /// hides it with `ShowCursor(FALSE)` (`0x007B88BA`) and the game draws
-    /// mouse.shp itself, so it shows only where VERA draws no cursor but the
-    /// player points: over a status screen; over the battlefield where
-    /// `use_software_cursor` turns mouse.shp off (the debug pause, whose
-    /// developer overlay takes the pointer, or a missing mouse.sha) while
+    /// mouse.shp itself; VERA has the window system draw that shape
+    /// (`input::hardware_cursor`). The system arrow shows only where VERA
+    /// draws no cursor but the player points: over a status screen; over the
+    /// battlefield where `use_software_cursor` turns mouse.shp off (the debug
+    /// pause, whose developer overlay takes the pointer, or a missing mouse.sha) while
     /// WWMouse's depth is visible; wherever the pointer left the client area,
     /// because `DefWindowProc` answers a non-client `WM_SETCURSOR` with the
     /// system arrow and mouse.shp has no title-bar art, or the window is not
     /// active (see `PlatformState::owns_pointer`); and elsewhere only
     /// without mouse.sha, which the shell pages draw whenever it loaded.
-    fn show_os_cursor_only_without_game_cursor(state: &mut AppState, battlefield_drawn: bool) {
-        // Hardware-cursor mode: the compositor owns the pointer, so the OS
-        // cursor stays visible everywhere and no software cursor is drawn.
-        if std::env::var_os("VERA_HW_CURSOR").is_some() {
-            if state.platform.owns_pointer() || battlefield_drawn {
-                crate::app::input::cursor::set_os_cursor_visible(state, true);
-            }
-            return;
-        }
+    fn show_os_cursor_only_without_game_cursor(
+        state: &mut AppState,
+        event_loop: &ActiveEventLoop,
+        battlefield_drawn: bool,
+    ) {
         let status_screen_drawn = std::mem::take(&mut state.frontend.status_screen_drawn);
-        let visible = !state.platform.owns_pointer()
+        let arrow = !state.platform.owns_pointer()
             || if state.platform.cursor_confined {
                 // Confined: the game owns the pointer through its
                 // software cursor, so keep the OS cursor hidden everywhere the game
@@ -703,109 +827,7 @@ impl App {
                             .is_none()
                     }
             };
-        // Asking winit is not free on Windows: `set_cursor_visible` runs
-        // `refresh_os_cursor`, which clears any OS cursor clip winit does not own
-        // itself, so repeating the same answer every frame would tear
-        // `cursor_confined` down once per frame and let the pointer slip out of
-        // the window between two re-asserts. Hand over only a transition, then put
-        // the clip straight back.
-        if state.platform.os_cursor_visible == Some(visible) {
-            return;
-        }
-        crate::app::input::cursor::set_os_cursor_visible(state, visible);
-        crate::app::input::cursor::reassert_cursor_confinement(state);
-    }
-
-/// Nearest-neighbour scale of a cursor image, so the art keeps its hard pixel
-/// edges while matching the compositor's upscale of the frame.
-#[cfg(target_os = "linux")]
-fn scale_cursor(
-    rgba: &[u8],
-    width: f32,
-    height: f32,
-    hotspot: [f32; 2],
-    scale: f32,
-) -> (Vec<u8>, u16, u16, u16, u16) {
-    let src_w = width.max(1.0) as u32;
-    let src_h = height.max(1.0) as u32;
-    let dst_w = ((src_w as f32 * scale).round() as u32).max(1);
-    let dst_h = ((src_h as f32 * scale).round() as u32).max(1);
-    let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
-    for y in 0..dst_h {
-        let sy = (y as f32 / scale) as u32;
-        for x in 0..dst_w {
-            let sx = (x as f32 / scale) as u32;
-            let src = ((sy.min(src_h - 1) * src_w + sx.min(src_w - 1)) * 4) as usize;
-            let dst = ((y * dst_w + x) * 4) as usize;
-            if src + 4 <= rgba.len() && dst + 4 <= out.len() {
-                out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
-            }
-        }
-    }
-    let hot_x = (hotspot[0] * scale).clamp(0.0, (dst_w - 1) as f32) as u16;
-    let hot_y = (hotspot[1] * scale).clamp(0.0, (dst_h - 1) as f32) as u16;
-    (out, dst_w as u16, dst_h as u16, hot_x, hot_y)
-}
-
-    /// Keep the compositor cursor on the retail art while `VERA_HW_CURSOR` is
-    /// set: the engine hides its software cursor, but the pointer still has to
-    /// show the right shape (arrow, attack, move, scroll arrows).
-    #[cfg(target_os = "linux")]
-    fn sync_hardware_cursor(state: &mut AppState, event_loop: &ActiveEventLoop) {
-        use std::cell::{Cell, RefCell};
-        use std::collections::HashMap;
-
-        thread_local! {
-            static CACHE: RefCell<HashMap<(u32, usize, u32), winit::window::CustomCursor>> =
-                RefCell::new(HashMap::new());
-            static SHOWN: Cell<Option<(u32, usize, u32)>> = const { Cell::new(None) };
-        }
-
-        if std::env::var_os("VERA_HW_CURSOR").is_none() {
-            return;
-        }
-        let targets = crate::app::input::cursor::CursorTargets::read(state);
-        let Some((id, index, frame, hotspot)) =
-            crate::app::presentation::ui_overlays::hardware_cursor_frame(state, &targets)
-        else {
-            return;
-        };
-        // The compositor scales the low-resolution frame up to the panel, so
-        // the cursor has to grow by the same factor or it looks tiny next to
-        // the upscaled world.
-        let scale = state
-            .platform
-            .window
-            .current_monitor()
-            .map(|monitor| {
-                let window_width = state.platform.window.inner_size().width.max(1);
-                monitor.size().width as f32 / window_width as f32
-            })
-            .unwrap_or(1.0)
-            .clamp(1.0, 4.0);
-        let key = (id as u32, index, (scale * 100.0).round() as u32);
-        if SHOWN.with(|shown| shown.get()) == Some(key) {
-            return;
-        }
-        let cursor = CACHE.with(|cache| {
-            if let Some(cursor) = cache.borrow().get(&key) {
-                return Some(cursor.clone());
-            }
-            let (rgba, width, height, hot_x, hot_y) =
-                Self::scale_cursor(frame.rgba.as_slice(), frame.width, frame.height, hotspot, scale);
-            let source =
-                winit::window::CustomCursor::from_rgba(rgba, width, height, hot_x, hot_y).ok()?;
-            let cursor = event_loop.create_custom_cursor(source);
-            cache.borrow_mut().insert(key, cursor.clone());
-            Some(cursor)
-        });
-        if let Some(cursor) = cursor {
-            state
-                .platform
-                .window
-                .set_cursor(winit::window::Cursor::Custom(cursor));
-            SHOWN.with(|shown| shown.set(Some(key)));
-        }
+        crate::app::input::hardware_cursor::show(state, event_loop, arrow);
     }
 
     /// Dispatch rendering based on current GameScreen state.
@@ -816,6 +838,10 @@ fn scale_cursor(
         mut hidden_run: Option<&mut crate::app::hidden_run::HiddenRun>,
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
+        if crate::app::quit_guard::take_trainer_toggle_request() {
+            state.match_state.trainer_visible = !state.match_state.trainer_visible;
+            state.platform.window.request_redraw();
+        }
         // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
         // request here, never a process exit.
         if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
@@ -824,23 +850,29 @@ fn scale_cursor(
         {
             crate::app::input::dispatch::open_pause_menu(state);
         }
-        crate::app::diagnostics::frame_stats::note_frame();
-        // Hold the presentation to the configured frame rate. The window uses
-        // Fifo, so without this a 144 Hz panel renders 144 frames a second.
-        // Rendering stays at the display cap regardless of game speed: the
-        // slider controls simulation ticks per second, not frames.
-        if shell_capture.is_none() {
-            crate::app::present_cap::pace_frame(state.platform.window.has_focus());
-        }
-        #[cfg(target_os = "linux")]
-        Self::sync_hardware_cursor(state, event_loop);
+        // Publish the player's colour-vision matrix before any early-return
+        // present and before synchronous loading repaints: all of them encode
+        // through the shared filter on GpuContext, not just the frame's tail.
+        state
+            .renderer
+            .gpu
+            .set_color_vision_matrix(state.color_vision_matrix());
         // The glyph atlas empties or grows only between frames, while no
         // instance built from it is waiting to draw.
         state
             .renderer
             .bit_font
             .begin_frame(&state.renderer.gpu.device, &state.renderer.batch_renderer);
+        state.platform.hardware_cursor.set_frames_read_back(
+            shell_capture.is_some()
+                || hidden_run.is_some()
+                || state
+                    .match_state
+                    .match_diagnostics
+                    .playback_capture_requested(),
+        );
         if let Some(presented) = crate::app::persistence::commands::pump_saved_game_load(state) {
+            crate::app::input::hardware_cursor::hide_game_cursor(state);
             return Ok(if presented {
                 FrameRenderOutcome::Presented
             } else {
@@ -871,7 +903,10 @@ fn scale_cursor(
             .match_state
             .match_diagnostics
             .begin_presentation_observation();
-        crate::app::presentation::interpolation::prepare(state, hidden_run.is_some());
+        crate::app::diagnostics::performance_overlay::observe_simulation(
+            state,
+            hidden_run.is_some(),
+        );
         let tooltip_ms = crate::app::input::tooltips::update(state);
         // `Init_Game` plays the startup logo (`0x0052C5E2`) before it presents
         // the splash (`0x0052C5F3`): the splash waits while a movie owns the
@@ -900,10 +935,11 @@ fn scale_cursor(
                 Some(splash),
             )?;
             if presented {
-                state
-                    .platform
-                    .frame_pacer
-                    .record_presented(Instant::now(), None);
+                state.platform.frame_pacer.record_presented(
+                    Instant::now(),
+                    None,
+                    crate::util::time::Duration::ZERO,
+                );
                 state
                     .frontend
                     .startup_splash
@@ -946,6 +982,7 @@ fn scale_cursor(
             event_loop,
             hidden_run.is_none() && !shell_capture_owns_simulation,
             catch_up_allowed,
+            shell_capture.is_some() || hidden_run.is_some(),
         );
         if runtime_pass.quit_requested {
             return Ok(FrameRenderOutcome::Unavailable);
@@ -999,19 +1036,27 @@ fn scale_cursor(
         // still follows exactly one match service. The picture is judged by
         // the clock before the draw (`redraw_gate::PictureClock`).
         let picture_clock = crate::app::match_runtime::redraw_gate::PictureClock::now();
-        let unchanged = pass == FramePass::Probe
-            && state.platform.redraw_gate.still_presented(
+        let verdict = (pass == FramePass::Probe).then(|| {
+            state.platform.redraw_gate.probe_verdict(
                 crate::app::match_runtime::redraw_gate::still_frame(
                     state,
                     false,
                     runtime_pass.screen_shake_offset,
                     picture_clock,
                 ),
-            );
-        // The gate's audit draws the pass anyway and checks its pixels.
-        if unchanged && !state.platform.redraw_gate.auditing() {
-            state.match_state.network_quality.picture_stood();
-            return Ok(FrameRenderOutcome::Unchanged);
+                picture_clock.at,
+            )
+        });
+        let unchanged = verdict == Some(ProbeVerdict::Stands);
+        match verdict {
+            // The gate's audit draws the pass anyway and checks its pixels.
+            Some(ProbeVerdict::Stands) if state.platform.redraw_gate.auditing() => {}
+            Some(ProbeVerdict::Stands | ProbeVerdict::PointerWaits) => {
+                state.match_state.network_quality.picture_stood();
+                return Ok(FrameRenderOutcome::Unchanged);
+            }
+            Some(ProbeVerdict::DrawWaits) => return Ok(FrameRenderOutcome::Unchanged),
+            Some(ProbeVerdict::Draw) | None => {}
         }
         // Judged after the service: a frame that arrived or came due while
         // it ran may still go before this draw.
@@ -1061,6 +1106,9 @@ fn scale_cursor(
             crate::app::frontend::shell_transition::MainMenuFirstPaintPoll::Acquire => {}
         }
 
+        // With VSync the acquire waits for a free picture, for most of a
+        // refresh once two are queued: the draw's wait, not its work.
+        let acquire_started = Instant::now();
         let Some(output) = state
             .renderer
             .gpu
@@ -1070,6 +1118,7 @@ fn scale_cursor(
             Self::follow_window_size(state);
             return Ok(FrameRenderOutcome::Unavailable);
         };
+        let screen_wait = Instant::now().saturating_duration_since(acquire_started);
         let view: wgpu::TextureView = output.texture.create_view(&Default::default());
         let mut encoder: wgpu::CommandEncoder =
             state
@@ -1081,6 +1130,12 @@ fn scale_cursor(
                 });
         state.renderer.gpu.timer.begin_frame(&mut encoder);
         state.renderer.window_ui.begin_frame();
+        if state.match_state.input.retail_screenshot_requested {
+            state
+                .renderer
+                .retail_screenshot_frame_cache
+                .retain_presented(&state.renderer.gpu.device, &mut encoder);
+        }
         let mut pending_main_menu_entry_token = None;
         let mut pending_main_menu_title_receipt = None;
         use crate::app::diagnostics::shell_capture::PresentedShell;
@@ -1115,14 +1170,22 @@ fn scale_cursor(
             }
             _ if page == Some(ModalPage::NetworkFailure) => {
                 crate::app::frontend::skirmish_shell_render::render_network_failure(
-                    state, &mut encoder, &output.texture,
+                    state,
+                    &mut encoder,
+                    &output.texture,
                 )?;
             }
             _ if page == Some(ModalPage::NetworkWait)
-                && crate::app::frontend::skirmish_shell_render::connection_shell_drawable(state) =>
+                && crate::app::frontend::skirmish_shell_render::connection_shell_drawable(
+                    state,
+                ) =>
             {
                 // 0xEA is pushed over whatever the game shows, in-game A3 included.
-                crate::app::frontend::skirmish_shell_render::render_connection_shell(state, &mut encoder, &output.texture)?;
+                crate::app::frontend::skirmish_shell_render::render_connection_shell(
+                    state,
+                    &mut encoder,
+                    &output.texture,
+                )?;
             }
             _ if page == Some(ModalPage::Keyboard) => {
                 // The launcher's A3 is a family page, so its entry wave has to be
@@ -1137,12 +1200,14 @@ fn scale_cursor(
                         &mut encoder,
                         &output.texture,
                     )?,
-                    crate::app::frontend::shell_transition::ShellFirstPaintRenderResult::Rendered {
-                        ..
-                    }
+                    crate::app::frontend::shell_transition::ShellFirstPaintRenderResult::Rendered { .. }
                 );
                 if !slid {
-                    crate::app::frontend::skirmish_shell_render::render_keyboard_shell(state, &mut encoder, &output.texture)?;
+                    crate::app::frontend::skirmish_shell_render::render_keyboard_shell(
+                        state,
+                        &mut encoder,
+                        &output.texture,
+                    )?;
                 }
             }
             _ if screen_page == ScreenPage::FullscreenMovie => {
@@ -1199,6 +1264,17 @@ fn scale_cursor(
                                 &output.texture,
                             )? {
                                 presented_shell = PresentedShell::MovieList;
+                            } else {
+                                Self::render_shell_error(state, &mut encoder, &view)?;
+                            }
+                        }
+                        ScreenPage::Mods => {
+                            if crate::app::frontend::mods_render::render_mods_page(
+                                state,
+                                &mut encoder,
+                                &output.texture,
+                            )? {
+                                presented_shell = PresentedShell::Mods;
                             } else {
                                 Self::render_shell_error(state, &mut encoder, &view)?;
                             }
@@ -1301,6 +1377,13 @@ fn scale_cursor(
                         }
                     }
                 }
+                if page == Some(ModalPage::ShellMessageBox) {
+                    crate::app::frontend::main_menu_shell_render::render_shell_message_box_over_page(
+                        state,
+                        &mut encoder,
+                        &output.texture,
+                    );
+                }
             }
             GameScreen::Loading => {
                 match crate::app::loading::pump::render_loading_screen(
@@ -1314,7 +1397,9 @@ fn scale_cursor(
                             .unwrap_or("auto")
                             .to_string();
                         crate::app::frontend::status_screen::render(
-                            state, &mut encoder, &view,
+                            state,
+                            &mut encoder,
+                            &view,
                             &crate::i18n::tr("VERA:Loading"),
                             &crate::i18n::tr_fill("VERA:LoadingMap", &[("map", &map_name_display)]),
                             crate::app::frontend::status_screen::Buttons::NONE,
@@ -1342,7 +1427,9 @@ fn scale_cursor(
                 let abort = state.match_state.match_presentation.in_game_menu
                     == crate::ui::pause_menu::InGameMenuState::AbortConfirm;
                 crate::app::frontend::status_screen::render(
-                    state, &mut encoder, &view,
+                    state,
+                    &mut encoder,
+                    &view,
                     &crate::i18n::tr(if abort {
                         "VERA:LeaveMissionQuestion"
                     } else {
@@ -1360,12 +1447,21 @@ fn scale_cursor(
                 //53B460 copies the already-composed surface, before this
                 //frame's world replaces it. The effect owns the retained copy.
                 let chrono_tactical = crate::app::input::camera::tactical_viewport_px(state);
-                state.match_state.match_presentation.chrono_screen.before_frame(
-                    &state.renderer.gpu,
-                    &mut encoder,
-                    state.renderer.game_frame_texture(),
-                    [chrono_tactical.0, chrono_tactical.1, chrono_tactical.2, chrono_tactical.3],
-                );
+                state
+                    .match_state
+                    .match_presentation
+                    .chrono_screen
+                    .before_frame(
+                        &state.renderer.gpu,
+                        &mut encoder,
+                        state.renderer.game_frame_texture(),
+                        [
+                            chrono_tactical.0,
+                            chrono_tactical.1,
+                            chrono_tactical.2,
+                            chrono_tactical.3,
+                        ],
+                    );
                 let times = render::GameRenderTimes {
                     radar_ms: state.radar_presentation_ms(),
                     tooltip_ms,
@@ -1387,6 +1483,10 @@ fn scale_cursor(
                 } else {
                     crate::app::presentation::tactical_composite::CompositeCadence::PerMainTick
                 };
+                // Drawing reads the simulation and never writes it: the
+                // minimap keeps its own radar-terrain backlog, so the frame
+                // moves the simulation's newly marked cells there first.
+                Self::drain_radar_terrain_marks(state);
                 let game_output = if state.renderer.upscale_pass.is_some() {
                     // Render game to intermediate texture, then upscale to swapchain.
                     let up = state.renderer.upscale_pass.as_ref().unwrap();
@@ -1397,15 +1497,23 @@ fn scale_cursor(
                     let render_output = result?;
                     state.renderer.copy_game_frame_to(
                         &mut encoder,
-                        state.renderer.upscale_pass.as_ref().unwrap().color_texture(),
+                        state
+                            .renderer
+                            .upscale_pass
+                            .as_ref()
+                            .unwrap()
+                            .color_texture(),
                     );
                     state
-                        .renderer.upscale_pass
+                        .renderer
+                        .upscale_pass
                         .as_ref()
                         .unwrap()
                         .draw(&mut encoder, &view);
                     crate::app::presentation::sidebar_surface::draw_window_copy(
-                        state, &mut encoder, &view,
+                        state,
+                        &mut encoder,
+                        &view,
                     );
                     crate::app::presentation::window_ui::draw_battlefield(
                         state,
@@ -1419,6 +1527,12 @@ fn scale_cursor(
                     state
                         .renderer
                         .copy_game_frame_to(&mut encoder, &output.texture);
+                    render::draw_software_cursor(
+                        state,
+                        &mut encoder,
+                        &view,
+                        render_output.software_cursor,
+                    );
                     render_output
                 };
                 game_render_output = Some(game_output);
@@ -1473,7 +1587,11 @@ fn scale_cursor(
                     presented_shell = PresentedShell::Score;
                 } else {
                     crate::app::frontend::status_screen::render(
-                        state, &mut encoder, &view, &title, &detail,
+                        state,
+                        &mut encoder,
+                        &view,
+                        &title,
+                        &detail,
                         crate::app::frontend::status_screen::Buttons::BACK_TO_MENU,
                     );
                 }
@@ -1490,7 +1608,7 @@ fn scale_cursor(
         // The debug trainer panel lives in the same final-window overlay pass,
         // above gameplay and below the playback status line.
         #[cfg(feature = "debug-tools")]
-        if state.frontend.screen == GameScreen::InGame {
+        if state.frontend.screen == GameScreen::InGame && state.match_state.trainer_visible {
             let states = crate::app::debug_tools::trainer_row_states(state);
             let rows: Vec<String> = states
                 .iter()
@@ -1533,7 +1651,7 @@ fn scale_cursor(
                     let frame = state
                         .match_state
                         .sim_runtime
-                        .as_ref()?
+                        .runtime()?
                         .simulation
                         .session()
                         .binary_frame();
@@ -1545,8 +1663,8 @@ fn scale_cursor(
                             // The relay drops a lapsed pass, which only the
                             // lobby can renew: then waiting cannot help.
                             let lapsed = live.relay_expires().is_some_and(|expires| {
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
+                                crate::util::time::SystemTime::now()
+                                    .duration_since(crate::util::time::UNIX_EPOCH)
                                     .is_ok_and(|now| now.as_secs() >= expires)
                             });
                             Some(crate::i18n::tr(if lapsed {
@@ -1589,7 +1707,11 @@ fn scale_cursor(
             // central primary-client rectangle.
             apply_screen_shake(state, &mut encoder, &output.texture, offset_px);
         }
-        Self::show_os_cursor_only_without_game_cursor(state, game_render_output.is_some());
+        Self::show_os_cursor_only_without_game_cursor(
+            state,
+            event_loop,
+            game_render_output.is_some(),
+        );
 
         let entry_sequence_identity = match shell_capture.as_deref_mut() {
             Some(session) if session.is_entry_sequence() => {
@@ -1719,19 +1841,25 @@ fn scale_cursor(
             .and_then(|output| output.phases)
             .map(|phases| (phases, Instant::now()));
         state.renderer.gpu.timer.end_frame(&mut encoder);
-        let submission = state
+        // VERA's colour-vision filter is the last draw of every presented
+        // frame, so the world, sidebar, menus, overlays and software cursor
+        // are all covered. Every screenshot and capture readback above is
+        // encoded earlier in this command buffer and stays uncorrected.
+        // Synchronous loading repaints call the same GpuContext helper.
+        state
             .renderer
             .gpu
-            .queue
-            .submit(std::iter::once(encoder.finish()));
-        output.present(&state.renderer.gpu.queue);
+            .encode_color_vision(&mut encoder, &output.texture);
+        let submission = state.renderer.gpu.hand_off_frame(encoder, output);
         let presented_at = Instant::now();
+        let handoff_waited = state.renderer.gpu.take_handoff_wait();
         if let Some((mut phases, handoff_started)) = measured_phases {
-            // Handing the frame to the driver: every bounded submission this
-            // frame (render_game's and any after it), then encoding the rest,
-            // submitting and presenting.
+            // What handing frames to the driver cost this thread: every
+            // bounded submission this frame (render_game's and any after it),
+            // the send to the hand-off thread, and any wait for the last one.
             phases.handoff = state.renderer.terrain_draw_renderer.frame_submit_time()
-                + presented_at.duration_since(handoff_started);
+                + presented_at.duration_since(handoff_started)
+                + handoff_waited;
             #[cfg(feature = "telemetry-dashboard")]
             state.diag.render_timing.record(phases);
             state
@@ -1740,10 +1868,11 @@ fn scale_cursor(
                 .record_render_phases(phases);
         }
         let battlefield = state.frontend.screen == GameScreen::InGame;
-        state
-            .platform
-            .frame_pacer
-            .record_presented(presented_at, battlefield.then_some(draw_started));
+        state.platform.frame_pacer.record_presented(
+            presented_at,
+            battlefield.then_some(draw_started),
+            screen_wait,
+        );
         if battlefield {
             state
                 .match_state
@@ -1756,7 +1885,8 @@ fn scale_cursor(
             .commit_presentation_observation()
         {
             // Diagnostic callback is an upper bound on this submitted frame's
-            // GPU completion. It never waits or enters simulation state.
+            // GPU completion; reaching the queue waits for the frame's hand-off,
+            // so it covers this frame. It never waits or enters simulation state.
             state.renderer.gpu.queue.on_submitted_work_done(move || {
                 *completed.lock().unwrap_or_else(|error| error.into_inner()) =
                     Some(crate::app::match_diagnostics::ObservationTime::now());
@@ -1783,42 +1913,49 @@ fn scale_cursor(
             } else {
                 [0, 0]
             });
-        let still = crate::app::match_runtime::redraw_gate::still_frame(
-            state,
-            shell_capture.is_some() || hidden_run.is_some(),
-            runtime_pass.screen_shake_offset,
-            picture_clock,
-        );
-        state.platform.redraw_gate.record_presented(still);
-        if let Some(readback) = pending_gate_audit {
-            let pixels = readback.finish(
-                &state.renderer.gpu.device,
-                submission.clone(),
-                crate::render::screenshot::READBACK_TIMEOUT,
-            )?;
-            state
-                .platform
-                .redraw_gate
-                .audit_presented(pixels, unchanged);
-        }
         // A family renderer that drew a timer-driven 0x71C frame this pass
         // advances it now that the frame reached the screen.
         state.frontend.shell_monitor.commit_presented();
         state.frontend.shell_page_title.commit_presented();
-        state.frontend.shell_status_line.commit_presented();
+        let mut status_step = state.frontend.shell_status_line.commit_presented();
         if let Some(page) = state.frontend.score_page.as_mut() {
             page.commit_presented();
         }
         if let Some(page) = state.frontend.campaign_score_page.as_mut() {
             page.commit_presented();
         }
+        if let Some(ui) = state.frontend.multiplayer_setup.as_mut() {
+            status_step |= ui.statics.commit_presented();
+        }
         let skirmish = &mut state.frontend.skirmish_shell_state;
-        skirmish.statics.commit_presented();
+        status_step |= skirmish.statics.commit_presented();
         if let Some(modal) = skirmish.choose_map_modal.as_mut() {
-            modal.statics.commit_presented();
+            status_step |= modal.statics.commit_presented();
         }
         if let Some(setup) = skirmish.random_map_setup_modal.as_mut() {
-            setup.statics.commit_presented();
+            status_step |= setup.statics.commit_presented();
+        }
+        let still = crate::app::match_runtime::redraw_gate::still_frame(
+            state,
+            shell_capture.is_some() || hidden_run.is_some(),
+            runtime_pass.screen_shake_offset,
+            picture_clock,
+        );
+        let limits = crate::app::match_runtime::redraw_gate::draw_limits(state, status_step);
+        state
+            .platform
+            .redraw_gate
+            .record_presented(still, draw_started, limits);
+        if let Some(readback) = pending_gate_audit {
+            let pixels = readback.finish(
+                &state.renderer.gpu.device,
+                submission.index(),
+                crate::render::screenshot::READBACK_TIMEOUT,
+            )?;
+            state
+                .platform
+                .redraw_gate
+                .audit_presented(pixels, unchanged);
         }
         if let Some(token) = pending_main_menu_entry_token.take() {
             crate::app::frontend::shell_transition::record_main_menu_entry_presented(state, token)?;
@@ -1828,7 +1965,7 @@ fn scale_cursor(
             shell_capture
                 .as_deref_mut()
                 .expect("entry-sequence session exists for retained readback")
-                .record_entry_sequence_submission(identity, readback, submission.clone())?;
+                .record_entry_sequence_submission(identity, readback, submission.index())?;
         }
         if let Some(receipt) = pending_main_menu_title_receipt.take() {
             anyhow::ensure!(
@@ -1854,7 +1991,7 @@ fn scale_cursor(
         if let Some(pending_capture) = pending_capture {
             let pixels = pending_capture.finish(
                 &state.renderer.gpu.device,
-                submission.clone(),
+                submission.index(),
                 capture_timeout.expect("capture timeout exists with pending readback"),
             )?;
             let surface_format = state.renderer.gpu.config.format;
@@ -1862,7 +1999,7 @@ fn scale_cursor(
                 let runtime = state
                     .match_state
                     .sim_runtime
-                    .as_ref()
+                    .runtime()
                     .expect("rendered replay runtime");
                 state
                     .match_state
@@ -1892,7 +2029,7 @@ fn scale_cursor(
         if let Some(pending_screenshot) = pending_retail_screenshot {
             match pending_screenshot.finish(
                 &state.renderer.gpu.device,
-                submission,
+                submission.index(),
                 crate::render::screenshot::READBACK_TIMEOUT,
             ) {
                 Ok(pixels) => match crate::render::screenshot::write_retail_screenshot(
@@ -1921,7 +2058,7 @@ fn scale_cursor(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_app))]
 mod tests {
     use super::*;
 

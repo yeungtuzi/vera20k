@@ -106,8 +106,8 @@ pub(crate) const PAGE: MenuPageSpec = MenuPageSpec {
 
 /// The normal VERA lobby keeps core play and Options. It has no welcome
 /// `0x10E`, so its third row is that page's Quick Match (`0x6E0`, its caption
-/// and tooltip) and Options moves to the fourth. The retail page above remains
-/// the owner for legacy service diagnostics.
+/// and tooltip) and Options moves to the fourth. The retail page above
+/// remains the owner for legacy service diagnostics.
 const ONLINE_PAGE: MenuPageSpec = MenuPageSpec {
     stacked: &[
         button(CREATE, 111, "GUI:CreateGame", "STT:LobbyButtonNew"),
@@ -430,11 +430,16 @@ const BADGES: [(u32, &str, &str); 10] = [
 ];
 
 /// `0x00783B80`: the badge of the high-score points.
-fn badge(points: u32) -> &'static str {
+pub(crate) fn badge(points: u32) -> &'static str {
     BADGES
         .iter()
         .find(|(from, ..)| points >= *from)
         .map_or("private.pcx", |(_, file, _)| file)
+}
+
+/// Every badge's PCX, highest first.
+pub(crate) fn badge_files() -> impl Iterator<Item = &'static str> {
+    BADGES.iter().map(|(_, file, _)| *file)
 }
 
 /// The text key of the badge drawn from `file`.
@@ -908,7 +913,7 @@ impl WolLobbyState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_ui))]
 mod tests {
     use super::*;
 
@@ -1089,6 +1094,7 @@ mod tests {
             limit_icon: None,
             ping: -1,
             tag: None,
+            watch: false,
         };
         let mut lobby = WolLobbyState::new(false, false);
         lobby.replace_games(vec![row("a"), row("b")]);

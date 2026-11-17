@@ -212,8 +212,17 @@ impl From<&AttackerSnapshot> for FireSource {
 /// locomotor's vt+0x24 at `0x006F3DB7`), including the translation of a
 /// rocking hull.
 ///
-/// BuildingClass's override (`0x00453A70`) has no port: neither caller
-/// reaches a building.
+/// BuildingClass's override (`0x00453A70`), which an EMP cannon's Missile
+/// mission launches from (`0x0043EC12`, `0x0044D1F9`), returns before that
+/// body for an occupied building or a `PrimaryFirePixelOffset=` type (the
+/// object coordinate, vt+0xAC, plus the port's or offset's
+/// IsometricPixelToWorld at its Z, `0x00453A9D..0x00453AE7`) and for a
+/// `BarrelAnimIsVoxel=` type (GetTurretDrawPosition, [`barrel_voxel_coordinate`]);
+/// otherwise a `TurretAnimIsVoxel=` type adds the pixel offset of its
+/// `TurretAnimX=`/`TurretAnimY=` to the body's result (`0x00453A12..
+/// 0x00453A4C` in shape). [`FireSource::of_entity`] has no firing port, so an
+/// occupied building takes the unoccupied arms here (no EMP cannon is
+/// occupiable in any retail type).
 pub fn turret_pivot_coordinate(
     world: &Simulation,
     rules: &RuleSet,
@@ -237,6 +246,25 @@ pub fn turret_pivot_coordinate(
         );
     }
     let base = fire_coordinate_base(world, rules, &source, obj);
+    let building = entity.category() == EntityCategory::Structure;
+    if building {
+        if let Some((px, py)) = building_pixel_offset(base.art, &source) {
+            let (dx, dy) = PixelConversionBounds::isometric_pixel_to_leptons(px, py);
+            return Some(ProjectileCoord::new(
+                base.x.wrapping_add(dx),
+                base.y.wrapping_add(dy),
+                base.z,
+            ));
+        }
+        if obj.barrel_anim_is_voxel {
+            return barrel_voxel_coordinate(world, &source, obj, &base).map(|fire| fire.coord);
+        }
+    }
+    let (voxel_x, voxel_y) = if building && obj.turret_anim_is_voxel {
+        PixelConversionBounds::isometric_pixel_to_leptons(obj.turret_anim_x, obj.turret_anim_y)
+    } else {
+        (0, 0)
+    };
     let offset = base.art.map_or(0, |art| art.turret_offset);
     let delta = if entity.locomotor.is_some() {
         // Authored TurretOffset is not clamped by the ART reader; ftol keeps
@@ -254,8 +282,8 @@ pub fn turret_pivot_coordinate(
         (offset, 0, 0)
     };
     Some(ProjectileCoord::new(
-        base.x.wrapping_add(delta.0),
-        base.y.wrapping_add(delta.1),
+        base.x.wrapping_add(delta.0).wrapping_add(voxel_x),
+        base.y.wrapping_add(delta.1).wrapping_add(voxel_y),
         base.z.wrapping_add(delta.2),
     ))
 }
@@ -967,6 +995,11 @@ fn barrel_voxel_coordinate(
 /// When nothing is picked and the firer rides an open-topped transport
 /// (`+0x82`), the weapon's `OpenToppedAnim=` (`+0x118`) plays instead
 /// (`0x006FF32F..0x006FF347`); stock gives it to PsychicJab and Virusgun.
+///
+/// RESIDUAL: the eight-way pick takes its facing from vt+0x308
+/// (`0x006FF2E5`), which for an aircraft is its SecondaryFacing (`+0x3A0`,
+/// `0x0041A570`); `aim_facing16` carries an aircraft's body facing. No retail
+/// aircraft weapon has `Anim=`.
 pub(crate) fn muzzle_anim_name(
     weapon: &crate::rules::weapon_type::WeaponType,
     aim_facing16: u16,
@@ -1008,7 +1041,7 @@ pub fn building_muzzle_z_adjust(offset_y: i32, occupied: bool) -> i32 {
 /// `0x006FF41D`: `MOV [anim+0x100], 0xFFFFFF38`.
 const OCCUPIED_MUZZLE_Z_ADJUST: i32 = -200;
 
-#[cfg(test)]
+#[cfg(all(test, tests_sim_combat_d_z))]
 mod tests {
     use super::*;
     use crate::rules::art_data::ArtRegistry;
@@ -1020,6 +1053,7 @@ mod tests {
             &IniFile::from_str(
                 "[InfantryTypes]\n0=E1\n1=INIT\n[VehicleTypes]\n[AircraftTypes]\n\
              [BuildingTypes]\n0=BUNK\n1=TOWER\n\
+             [Animations]\n0=F0\n1=F1\n2=F2\n3=F3\n4=F4\n5=F5\n6=F6\n7=F7\n8=GUNFIRE\n9=SPARE\n\
              [E1]\nStrength=125\nImage=GI\nPrimary=M60\nSecondary=ONE\n\
              [INIT]\nStrength=125\nPrimary=JAB\n\
              [BUNK]\nStrength=500\nCanBeOccupied=yes\n\
@@ -1580,15 +1614,15 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_sim_combat_d_z))]
 #[path = "fire_coord_building_tests.rs"]
 mod building_tests;
 
-#[cfg(test)]
+#[cfg(all(test, tests_sim_combat_d_z))]
 #[path = "fire_coord_hover_tests.rs"]
 mod hover_tests;
 
-#[cfg(test)]
+#[cfg(all(test, tests_sim_combat_d_z))]
 mod control_link_port_tests {
     use super::*;
     use crate::rules::art_data::ArtRegistry;

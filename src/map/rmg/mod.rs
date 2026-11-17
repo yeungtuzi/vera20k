@@ -6,7 +6,10 @@
 
 pub mod build;
 mod description;
+pub mod embellish;
 pub mod emit;
+pub mod extras;
+pub mod fairness;
 pub mod grid;
 pub mod options;
 pub mod phases;
@@ -17,7 +20,7 @@ pub mod rng;
 pub mod saved_seeds;
 pub mod scratch;
 pub mod settings;
-#[cfg(test)]
+#[cfg(all(test, tests_map))]
 pub mod sqrt_table;
 pub mod tech_catalog;
 pub mod theater_blocks;
@@ -52,6 +55,9 @@ pub enum Stage {
     TechBuildings,
     Tiberium,
     RegionReset,
+    /// Urban areas (`0x005A5020`): Ares hook 0x598FB8 when `RMG::UrbanAreas`
+    /// is set, or VERA's opted-in Urban Presence.
+    UrbanAreas,
     RecalcAfterTiberium,
     Hills,
     LatPatches,
@@ -88,6 +94,7 @@ pub const STAGE_ORDER: &[Stage] = &[
     Stage::TechBuildings,
     Stage::Tiberium,
     Stage::RegionReset,
+    Stage::UrbanAreas,
     Stage::RecalcAfterTiberium,
     Stage::Hills,
     Stage::LatPatches,
@@ -255,6 +262,9 @@ pub struct GeneratedMap {
     /// Start slots no region could fill. Non-zero means this map is short of
     /// spawns: fewer usable start positions than the player count implies.
     pub unfilled_start_slots: usize,
+    /// VERA extension: what the map offers each start (`fairness`), for the
+    /// dialog's readout. `None` for a map no generation run measured.
+    pub fairness: Option<fairness::FairnessReport>,
 }
 
 impl GeneratedMap {
@@ -271,9 +281,10 @@ impl GeneratedMap {
 /// off every theater but temperate (whose LAT driver still scatters trees).
 ///
 /// `options` must already be normalized — `build::generate_map` normalizes its
-/// copy before calling this.
+/// copy before calling this. `ares`: Ares.dll is loaded for this generation
+/// (`build::GenerationObjects::ares`).
 #[cfg(any(test, feature = "test-support"))]
-pub fn executed_stages(options: &RmgOptions) -> Vec<Stage> {
+pub fn executed_stages(options: &RmgOptions, ares: bool) -> Vec<Stage> {
     STAGE_ORDER
         .iter()
         .copied()
@@ -284,12 +295,15 @@ pub fn executed_stages(options: &RmgOptions) -> Vec<Stage> {
             if *stage == Stage::Rocks && options.theater != 0 {
                 return false;
             }
+            if *stage == Stage::UrbanAreas && !options.urban_pass_runs(ares) {
+                return false;
+            }
             true
         })
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, tests_map))]
 mod tests {
     use super::*;
 
@@ -326,14 +340,17 @@ mod tests {
     fn rocks_run_only_in_the_temperate_theater() {
         // Temperate (theater 0) paints rocks; every other theater skips them,
         // but still runs trees.
-        let temperate = executed_stages(&RmgOptions::default());
+        let temperate = executed_stages(&RmgOptions::default(), false);
         assert!(temperate.contains(&Stage::Rocks));
         assert!(temperate.contains(&Stage::Trees));
         for theater in [1, 2, 3, 4] {
-            let stages = executed_stages(&RmgOptions {
-                theater,
-                ..Default::default()
-            });
+            let stages = executed_stages(
+                &RmgOptions {
+                    theater,
+                    ..Default::default()
+                },
+                false,
+            );
             assert!(
                 !stages.contains(&Stage::Rocks),
                 "theater {theater} must not paint rocks"
@@ -348,20 +365,26 @@ mod tests {
     #[test]
     fn island_passes_are_skipped_for_ordinary_map_types() {
         for map_type in [0, 1, 2] {
-            let stages = executed_stages(&RmgOptions {
-                map_type,
-                ..Default::default()
-            });
+            let stages = executed_stages(
+                &RmgOptions {
+                    map_type,
+                    ..Default::default()
+                },
+                false,
+            );
             assert!(
                 !stages.contains(&Stage::IslandPasses),
                 "map type {map_type} must not run the island passes"
             );
         }
         for map_type in [3, 4] {
-            let stages = executed_stages(&RmgOptions {
-                map_type,
-                ..Default::default()
-            });
+            let stages = executed_stages(
+                &RmgOptions {
+                    map_type,
+                    ..Default::default()
+                },
+                false,
+            );
             assert!(
                 stages.contains(&Stage::IslandPasses),
                 "map type {map_type} must run the island passes"
@@ -375,11 +398,14 @@ mod tests {
     fn executed_stages_preserve_the_pipeline_order() {
         for map_type in 0..=4 {
             for theater in 0..=4 {
-                let stages = executed_stages(&RmgOptions {
-                    map_type,
-                    theater,
-                    ..Default::default()
-                });
+                let stages = executed_stages(
+                    &RmgOptions {
+                        map_type,
+                        theater,
+                        ..Default::default()
+                    },
+                    false,
+                );
                 assert!(!stages.is_empty());
                 let positions: Vec<usize> = stages.iter().map(|s| position(*s)).collect();
                 assert!(
