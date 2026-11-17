@@ -18,6 +18,11 @@ use crate::rules::art_data::AnimTypeRuntimeConfig;
 use crate::rules::ini_parser::IniFile;
 use crate::util::lookup_hash::LookupMap;
 
+/// Test-only count of palette tint computations: a regression test uses it to
+/// tell a cache hit from a recomputation.
+#[cfg(test)]
+static TINT_COMPUTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Internal light unit scale. `1000 == 1.0`.
 pub const LIGHT_UNIT: i32 = 1000;
 
@@ -387,6 +392,9 @@ pub struct CellLightGrid {
     /// Detached user-load staging also carries the process ColorScheme normal
     /// cache. It is deliberately absent from the saved file's value history.
     restore_history: Option<LightRgbKey>,
+    /// Bumped whenever a profile or its colours change; the per-thread tint
+    /// caches compare against it instead of being cleared eagerly.
+    tint_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Native Cell+104/+108/+10A values in VERA's saved local view.
@@ -406,6 +414,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_generation: Default::default(),
         }
     }
 
@@ -417,6 +426,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_generation: Default::default(),
         }
     }
 
@@ -427,6 +437,7 @@ impl CellLightGrid {
             detail_level: detail_level.min(2),
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
+            tint_generation: Default::default(),
         }
     }
 
@@ -458,6 +469,7 @@ impl CellLightGrid {
     }
 
     pub fn take_saved_local_lighting(&mut self) -> Option<(SavedCellLighting, LightRgbKey)> {
+        self.clear_tint_cache();
         self.restore_history
             .take()
             .map(|normal| (self.saved_local_lighting(), normal))
@@ -470,6 +482,7 @@ impl CellLightGrid {
     /// cell. They differ only where a retained refresh (`0x00484680`) left a
     /// cell apart from a full relight, and only after loading a save.
     pub fn apply_saved_local_lighting(&mut self, saved: &SavedCellLighting) {
+        self.clear_tint_cache();
         for &(cell, scale16, additive, top) in &saved.cells {
             if let Some(light) = self.cells.get_mut(&cell) {
                 light.scale16 = scale16;
@@ -487,6 +500,7 @@ impl CellLightGrid {
     /// LightConvert556090 retains normal RGB/row identity while selecting
     /// Ion alternate table RGB; neither normalization nor Cell104 changes.
     pub fn set_alternate_rgb(&mut self, rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         for profile in self
             .profiles
             .profiles
@@ -503,6 +517,7 @@ impl CellLightGrid {
     /// Constructor context changes only future cache entries; it never
     /// rewrites an existing Convert's retained colors or selected mode.
     pub fn set_constructor_alternate_rgb(&mut self, rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         self.profiles.constructor_alternate_rgb = rgb.map(|rgb| rgb.map(|v| v.clamp(0, 2000)));
     }
 
@@ -515,6 +530,7 @@ impl CellLightGrid {
     /// selects normal mode. Preserve row counts and Cell104. Lookup544EF8
     /// compares the mutable normal cache, so rebuild that derived index.
     pub fn retint_normal_rgb(&mut self, rgb: LightRgbKey) {
+        self.clear_tint_cache();
         let rgb = rgb.map(|v| v.clamp(0, 2000));
         for profile in self
             .profiles
@@ -557,6 +573,7 @@ impl CellLightGrid {
     /// 685120 ->53AB50 ->53C280 selects its mode separately; no saved mode
     /// bit or loaded Scenario normal-RGB field overwrites this cache.
     pub fn restore_color_scheme_normal_rgb(&mut self, rgb: LightRgbKey) {
+        self.clear_tint_cache();
         self.scheme_profile.normal_rgb_key = rgb;
     }
 
@@ -565,6 +582,7 @@ impl CellLightGrid {
     /// schemes and Anim+FC survive; new Cell Converts use555DA0's current
     /// constructor profile rather than a prior global normal-cache retint.
     pub fn reset_cell_converts(&mut self, constructor_rgb: Option<LightRgbKey>) {
+        self.clear_tint_cache();
         self.profiles = LightProfileCache::new();
         self.set_constructor_alternate_rgb(constructor_rgb);
         if let Some(rgb) = self.profiles.constructor_alternate_rgb {
@@ -590,6 +608,7 @@ impl CellLightGrid {
     where
         I: IntoIterator<Item = ((u16, u16), u8)>,
     {
+        self.clear_tint_cache();
         for (cell, height) in heights {
             if let Some(light) = self.cells.get_mut(&cell) {
                 light.refresh_retained_scalars(profile, height);
@@ -598,11 +617,13 @@ impl CellLightGrid {
     }
 
     pub fn insert_light(&mut self, cell: (u16, u16), light: CellLight) {
+        self.clear_tint_cache();
         self.cells.insert(cell, light);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn insert_profiled_light(&mut self, cell: (u16, u16), rgb: [f32; 3], common_scalar: f32) {
+        self.clear_tint_cache();
         let profile_id = self.profiles.profile_id_for_rgb(rgb);
         let rgb_key = rgb_to_key(rgb);
         self.insert_light(
@@ -613,6 +634,7 @@ impl CellLightGrid {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_compat_tint(&mut self, cell: (u16, u16), tint: [f32; 3]) {
+        self.clear_tint_cache();
         self.insert_profiled_light(cell, tint, 1.0);
     }
 
@@ -734,13 +756,48 @@ impl CellLightGrid {
     }
 
     fn tint_for_profile_scalar(&self, profile_id: LightProfileId, scalar: i32) -> [f32; 3] {
-        let profile = self
-            .profiles
-            .get(profile_id)
-            .or_else(|| self.profiles.get(self.profiles.default_profile_id()))
-            .expect("default light profile is always present");
-        let scalar = scalar as f32 / LIGHT_UNIT as f32;
-        key_to_rgb(profile.palette_rgb()).map(|channel| channel * scalar)
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        thread_local! {
+            /// Tints are pure in (profile, scalar), so a per-thread map needs no
+            /// locking: the frame path is single threaded and a stale generation
+            /// just rebuilds the map.
+            static TINTS: RefCell<(u64, HashMap<(usize, i32), [f32; 3]>)> =
+                RefCell::new((0, HashMap::new()));
+        }
+
+        let generation = self
+            .tint_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let key = (profile_id.0, scalar);
+        TINTS.with(|cell| {
+            let mut cache = cell.borrow_mut();
+            if cache.0 != generation {
+                cache.0 = generation;
+                cache.1.clear();
+            }
+            if let Some(hit) = cache.1.get(&key) {
+                return *hit;
+            }
+            let profile = self
+                .profiles
+                .get(profile_id)
+                .or_else(|| self.profiles.get(self.profiles.default_profile_id()))
+                .expect("default light profile is always present");
+            #[cfg(test)]
+            TINT_COMPUTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let scale = scalar as f32 / LIGHT_UNIT as f32;
+            let tint = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
+            cache.1.insert(key, tint);
+            tint
+        })
+    }
+
+    /// Invalidate every thread's tint cache after a profile change.
+    fn clear_tint_cache(&self) {
+        self.tint_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -1525,7 +1582,7 @@ fn signed_div_1000(value: i64) -> i32 {
     (value / i64::from(LIGHT_UNIT)) as i32
 }
 
-#[cfg(all(test, tests_map))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::rules::art_data::ArtRegistry;
@@ -2234,5 +2291,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The per-frame draw asks for the same (profile, scalar) tint once per
+    /// visible cell. A repeated lookup must come from the cache, not the
+    /// palette.
+    #[test]
+    fn tint_cache_answers_repeated_lookups_without_recomputing() {
+        let mut grid = CellLightGrid::new();
+        grid.insert_profiled_light((7, 9), [0.4, 0.6, 0.8], 1.0);
+        let first = grid.tint_for_common_scalar_or_default((7, 9));
+        let computed = TINT_COMPUTES.load(std::sync::atomic::Ordering::Relaxed);
+        let second = grid.tint_for_common_scalar_or_default((7, 9));
+        assert_eq!(first, second);
+        assert_eq!(
+            TINT_COMPUTES.load(std::sync::atomic::Ordering::Relaxed),
+            computed,
+            "a repeated tint lookup must hit the cache"
+        );
+    }
+
+    /// A profile change must not leave a stale tint behind: the cached value
+    /// has to follow the new palette, exactly as the uncached computation
+    /// would.
+    #[test]
+    fn tint_cache_follows_a_profile_retint() {
+        let mut grid = CellLightGrid::new();
+        grid.insert_profiled_light((1, 2), [0.2, 0.4, 0.6], 1.0);
+        let before = grid.tint_for_common_scalar_or_default((1, 2));
+        grid.retint_normal_rgb([1000, 500, 250]);
+        let after = grid.tint_for_common_scalar_or_default((1, 2));
+        assert_ne!(before, after, "retint must change the tint");
+
+        let light = grid.cell_light_at((1, 2)).expect("inserted cell").clone();
+        let profile = grid
+            .profiles()
+            .get(light.profile_id)
+            .expect("profile for the inserted cell");
+        let scale = light.common_scalar as f32 / LIGHT_UNIT as f32;
+        let expected = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
+        assert_eq!(after, expected, "cached tint must match the new palette");
     }
 }
