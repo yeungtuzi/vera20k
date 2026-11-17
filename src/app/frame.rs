@@ -829,6 +829,11 @@ impl App {
         if state.renderer.gpu.device_lost().is_some() {
             return Ok(FrameRenderOutcome::Unavailable);
         }
+        if crate::app::quit_guard::take_trainer_toggle_request() {
+            state.match_state.trainer_visible = !state.match_state.trainer_visible;
+            state.platform.window.request_redraw();
+        }
+        }
         // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
         // request here, never a process exit.
         if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
@@ -836,7 +841,6 @@ impl App {
             && crate::app::quit_guard::take_quit_request()
         {
             crate::app::input::dispatch::open_pause_menu(state);
-        }
         }
         // Publish the player's colour-vision matrix before any early-return
         // present and before synchronous loading repaints: all of them encode
