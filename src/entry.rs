@@ -268,7 +268,7 @@ fn run_with(
     app.finish_capture()?;
 
     log::info!(
-        "Performance summary: {}",
+        "{}",
         crate::app::diagnostics::frame_stats::summary(frame_stats_start)
     );
     log::info!("VERA20k shut down cleanly");
