@@ -382,3 +382,8 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Per-frame CPU matters more than compile time for the game binary.
+[profile.release]
+lto = "thin"
+codegen-units = 1

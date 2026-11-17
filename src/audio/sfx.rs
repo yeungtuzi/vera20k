@@ -1354,7 +1354,15 @@ const MAX_COORDINATE_REQUESTS: usize = 200;
 /// each cue reach the device first. Clamped to the device's supported range.
 #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
 fn sfx_buffer_frames(sample_rate: u32, supported: &rodio::cpal::SupportedBufferSize) -> u32 {
-    let target = (sample_rate / 100).max(1).next_power_of_two();
+    // `VERA_AUDIO_BUFFER=<frames>` raises the SFX period for hosts whose audio
+    // thread misses the default period (audible crackle while a mission loads).
+    let target = match std::env::var("VERA_AUDIO_BUFFER")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        Some(frames) if frames > 0 => frames,
+        _ => (sample_rate / 100).max(1).next_power_of_two(),
+    };
     match *supported {
         rodio::cpal::SupportedBufferSize::Range { min, max } => target.clamp(min, max.max(min)),
         rodio::cpal::SupportedBufferSize::Unknown => target,
