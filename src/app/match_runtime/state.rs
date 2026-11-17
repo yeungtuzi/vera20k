@@ -97,6 +97,10 @@ pub(crate) struct MatchState {
     /// house's MCV on that cell instead of selecting or ordering. Cleared by the
     /// click, by leaving the match, and never serialized.
     pub(crate) trainer_mcv_armed: bool,
+    /// Trainer panel visibility (Cmd/Ctrl+Alt+T). Client-side only.
+    pub(crate) trainer_visible: bool,
+    /// Wall-clock end of each one-shot trainer row's lit flash, indexed by row.
+    pub(crate) trainer_flash_until_ms: [u64; 9],
     /// Effective simulation ticks per second — controls game speed.
     /// Default follows retail/YR skirmish stored game speed 1.
     pub(crate) sim_speed_tps: u32,

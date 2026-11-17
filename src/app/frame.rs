@@ -1604,7 +1604,7 @@ impl App {
         // The debug trainer panel lives in the same final-window overlay pass,
         // above gameplay and below the playback status line.
         #[cfg(feature = "debug-tools")]
-        if state.frontend.screen == GameScreen::InGame {
+        if state.frontend.screen == GameScreen::InGame && state.match_state.trainer_visible {
             let states = crate::app::debug_tools::trainer_row_states(state);
             let rows: Vec<String> = states
                 .iter()

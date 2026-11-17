@@ -280,13 +280,26 @@ impl TrainerRow {
         }
     }
 
-    /// Switches show their on/off state; the rest are buttons that are merely
-    /// available or not.
+    /// Switches keep a lit on/off state; one-shot rows only flash after use.
     pub(crate) const fn is_switch(self) -> bool {
         matches!(
             self,
             Self::Tech | Self::RevealMap | Self::Invincible | Self::DeadlyShot
         )
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Tech => 0,
+            Self::PromoteAll => 1,
+            Self::Superweapons => 2,
+            Self::RevealMap => 3,
+            Self::TakeOver => 4,
+            Self::AddMoney => 5,
+            Self::Invincible => 6,
+            Self::DeadlyShot => 7,
+            Self::GetMcv => 8,
+        }
     }
 }
 
@@ -370,17 +383,37 @@ pub(crate) fn trainer_row_states(state: &crate::app::AppState) -> Vec<(TrainerRo
                 TrainerRow::PromoteAll
                 | TrainerRow::Superweapons
                 | TrainerRow::TakeOver
-                | TrainerRow::AddMoney => true,
-                // Lit while the next click is already armed for a drop.
-                TrainerRow::GetMcv => state.match_state.trainer_mcv_armed,
+                | TrainerRow::AddMoney
+                | TrainerRow::GetMcv => flash_active(state, row),
             };
             (row, lit)
         })
         .collect()
 }
 
+/// How long a one-shot row stays lit after a successful click.
+const TRAINER_FLASH_MS: u64 = 320;
+
+fn flash_active(state: &crate::app::AppState, row: TrainerRow) -> bool {
+    state.match_state.trainer_flash_until_ms[row.index()]
+        > crate::app::match_runtime::frame_pacer::wall_clock_ms()
+}
+
 /// Apply one panel row. Returns whether the trainer accepted it.
 pub(crate) fn activate_trainer_row(
+    state: &mut crate::app::AppState,
+    row: TrainerRow,
+) -> bool {
+    let accepted = activate_trainer_row_inner(state, row);
+    if accepted && !row.is_switch() {
+        state.match_state.trainer_flash_until_ms[row.index()] =
+            crate::app::match_runtime::frame_pacer::wall_clock_ms() + TRAINER_FLASH_MS;
+        state.platform.window.request_redraw();
+    }
+    accepted
+}
+
+fn activate_trainer_row_inner(
     state: &mut crate::app::AppState,
     row: TrainerRow,
 ) -> bool {
@@ -390,7 +423,7 @@ pub(crate) fn activate_trainer_row(
         let available = state
             .match_state
             .sim_runtime
-            .as_ref()
+            .runtime()
             .is_some_and(|runtime| runtime.simulation.trainer_available());
         if !available {
             return false;
