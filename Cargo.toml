@@ -264,6 +264,11 @@ arboard = { version = "3.7", default-features = false }
 [target.'cfg(windows)'.dependencies]
 mimalloc = { version = "0.1.52", default-features = false }
 
+# The same allocator on aarch64 Linux: the frame loop's short-lived instance
+# vectors dominated glibc malloc there (measured on a Cortex-A78 host).
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
+
 # --- Windows program icon and version details ---
 # build.rs compiles them into vera20k.exe with the Windows SDK's resource
 # compiler. A target table for build dependencies matches the host, so other
