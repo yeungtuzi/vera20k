@@ -429,6 +429,10 @@ impl GpuContext {
         // tearing.  On by default, matching the retail Options page.
         let vsync = std::env::var("VERA_VSYNC").map_or(true, |value| value != "0");
         let (present_mode, desired_maximum_frame_latency) = present_settings(vsync);
+        log::info!(
+            "present mode: {:?}, queued frames: {desired_maximum_frame_latency}",
+            present_mode
+        );
         let surface_format: wgpu::TextureFormat = surface_caps
             .formats
             .iter()
