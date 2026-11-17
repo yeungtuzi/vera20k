@@ -160,6 +160,21 @@ pub fn run_with_loop(
         crate::i18n::init(None, None);
     }
 
+    // On Linux the launcher owns the launch policy: it already refuses to
+    // start a second copy, and a directly executed engine would bypass that
+    // (and then fight the running one for the GPU and the settings files).
+    // Only the launcher's token gets past this gate; helpers the game spawns
+    // inherit it, and automated runs opt out explicitly.
+    #[cfg(target_os = "linux")]
+    if !matches!(launch_mode, AppLaunchMode::MapPicture(_) | AppLaunchMode::Usage)
+        && std::env::var_os("REUNION_LITE_LAUNCH").is_none()
+        && std::env::var_os("VERA_ALLOW_DIRECT_LAUNCH").is_none()
+    {
+        eprintln!("VERA20k 由 reunion-lite 启动：请从启动器进入游戏。");
+        log::warn!("refusing a direct launch: REUNION_LITE_LAUNCH is not set");
+        return Ok(1);
+    }
+
     // Callers supplying their own loop share the same help output. Desktop
     // startup handles this before creating its event loop.
     if matches!(launch_mode, AppLaunchMode::Usage) {
