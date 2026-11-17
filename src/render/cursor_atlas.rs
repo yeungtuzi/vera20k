@@ -184,6 +184,9 @@ pub(crate) struct SoftwareCursorFrame {
     pub(crate) texture: BatchTexture,
     pub(crate) width: f32,
     pub(crate) height: f32,
+    /// CPU copy for the compositor cursor (`VERA_HW_CURSOR`), which needs the
+    /// pixels rather than a texture.  Cursors are small and few.
+    pub(crate) rgba: Vec<u8>,
 }
 
 pub(crate) struct SoftwareCursorSequence {
@@ -761,6 +764,7 @@ fn build_cursor_frame(
         texture,
         width: shp.width as f32,
         height: shp.height as f32,
+        rgba,
     })
 }
 

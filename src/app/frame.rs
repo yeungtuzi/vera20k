@@ -716,6 +716,57 @@ impl App {
         crate::app::input::cursor::reassert_cursor_confinement(state);
     }
 
+    /// Keep the compositor cursor on the retail art while `VERA_HW_CURSOR` is
+    /// set: the engine hides its software cursor, but the pointer still has to
+    /// show the right shape (arrow, attack, move, scroll arrows).
+    #[cfg(target_os = "linux")]
+    fn sync_hardware_cursor(state: &mut AppState, event_loop: &ActiveEventLoop) {
+        use std::cell::{Cell, RefCell};
+        use std::collections::HashMap;
+
+        thread_local! {
+            static CACHE: RefCell<HashMap<(u32, usize), winit::window::CustomCursor>> =
+                RefCell::new(HashMap::new());
+            static SHOWN: Cell<Option<(u32, usize)>> = const { Cell::new(None) };
+        }
+
+        if std::env::var_os("VERA_HW_CURSOR").is_none() {
+            return;
+        }
+        let targets = crate::app::input::cursor::CursorTargets::read(state);
+        let Some((id, index, frame, hotspot)) =
+            crate::app::presentation::ui_overlays::hardware_cursor_frame(state, &targets)
+        else {
+            return;
+        };
+        let key = (id as u32, index);
+        if SHOWN.with(|shown| shown.get()) == Some(key) {
+            return;
+        }
+        let cursor = CACHE.with(|cache| {
+            if let Some(cursor) = cache.borrow().get(&key) {
+                return Some(cursor.clone());
+            }
+            let width = frame.width as u16;
+            let height = frame.height as u16;
+            let hot_x = hotspot[0].clamp(0.0, f32::from(width.saturating_sub(1))) as u16;
+            let hot_y = hotspot[1].clamp(0.0, f32::from(height.saturating_sub(1))) as u16;
+            let source =
+                winit::window::CustomCursor::from_rgba(frame.rgba.clone(), width, height, hot_x, hot_y)
+                    .ok()?;
+            let cursor = event_loop.create_custom_cursor(source);
+            cache.borrow_mut().insert(key, cursor.clone());
+            Some(cursor)
+        });
+        if let Some(cursor) = cursor {
+            state
+                .platform
+                .window
+                .set_cursor(winit::window::Cursor::Custom(cursor));
+            SHOWN.with(|shown| shown.set(Some(key)));
+        }
+    }
+
     /// Dispatch rendering based on current GameScreen state.
     pub(super) fn render_frame(
         state: &mut AppState,
@@ -740,6 +791,8 @@ impl App {
         if shell_capture.is_none() {
             crate::app::present_cap::pace_frame(state.platform.window.has_focus());
         }
+        #[cfg(target_os = "linux")]
+        Self::sync_hardware_cursor(state, event_loop);
         // The glyph atlas empties or grows only between frames, while no
         // instance built from it is waiting to draw.
         state
