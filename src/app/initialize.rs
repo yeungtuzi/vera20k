@@ -397,6 +397,10 @@ impl App {
                     .ok()
                     .as_deref(),
             );
+        log::info!(
+            "render interpolation: {}",
+            if options_profile.render_interpolation { "on" } else { "off" }
+        );
         let (window_width, window_height, window_visible) =
             startup_window_projection(profile_screen, capture_dimensions);
         let window_visible = window_visible && !hidden_spawn_window;
