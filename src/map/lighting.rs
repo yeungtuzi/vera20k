@@ -2332,4 +2332,29 @@ mod tests {
         let expected = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
         assert_eq!(after, expected, "cached tint must match the new palette");
     }
+
+    /// Micro-benchmark for the draw's tint lookup: one visible tile per cell,
+    /// sixty frames. Run with `--ignored --nocapture` to print ns/lookup.
+    #[test]
+    #[ignore]
+    fn tint_lookup_micro_bench() {
+        let mut grid = CellLightGrid::new();
+        for i in 0..2048u16 {
+            grid.insert_profiled_light((i, 3), [0.4, 0.6, 0.8], 1.0);
+        }
+        let lookups = 2048 * 60;
+        let start = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for _ in 0..60 {
+            for i in 0..2048u16 {
+                acc += grid.tint_for_common_scalar_or_default((i, 3))[0];
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "{lookups} lookups in {:?} = {:.1} ns/lookup (acc {acc:.1})",
+            elapsed,
+            elapsed.as_nanos() as f64 / f64::from(lookups)
+        );
+    }
 }
