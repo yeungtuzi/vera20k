@@ -833,6 +833,9 @@ impl App {
         pass: FramePass,
     ) -> Result<FrameRenderOutcome> {
         crate::app::diagnostics::frame_stats::note_frame();
+        // Hold the presentation to the configured frame rate: the panel is
+        // 120 Hz here and this GPU has no budget for 120 full frames.
+        crate::app::present_cap::pace_frame();
         // Publish the player's colour-vision matrix before any early-return
         // present and before synchronous loading repaints: all of them encode
         // through the shared filter on GpuContext, not just the frame's tail.
