@@ -387,10 +387,9 @@ pub struct CellLightGrid {
     /// Detached user-load staging also carries the process ColorScheme normal
     /// cache. It is deliberately absent from the saved file's value history.
     restore_history: Option<LightRgbKey>,
-    /// Palette tint per (profile, scalar).  Every visible tile asked for its
-    /// tint on every frame before this cache; the lookup itself is the same
-    /// for all cells that share a profile and scalar.
-    tint_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(usize, i32), [f32; 3]>>>,
+    /// Bumped whenever a profile or its colours change; the per-thread tint
+    /// caches compare against it instead of being cleared eagerly.
+    tint_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Native Cell+104/+108/+10A values in VERA's saved local view.
@@ -410,7 +409,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
-            tint_cache: Default::default(),
+            tint_generation: Default::default(),
         }
     }
 
@@ -422,7 +421,7 @@ impl CellLightGrid {
             detail_level: 2,
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
-            tint_cache: Default::default(),
+            tint_generation: Default::default(),
         }
     }
 
@@ -433,7 +432,7 @@ impl CellLightGrid {
             detail_level: detail_level.min(2),
             scheme_profile: LightProfile::neutral_scheme(),
             restore_history: None,
-            tint_cache: Default::default(),
+            tint_generation: Default::default(),
         }
     }
 
@@ -752,30 +751,46 @@ impl CellLightGrid {
     }
 
     fn tint_for_profile_scalar(&self, profile_id: LightProfileId, scalar: i32) -> [f32; 3] {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        thread_local! {
+            /// Tints are pure in (profile, scalar), so a per-thread map needs no
+            /// locking: the frame path is single threaded and a stale generation
+            /// just rebuilds the map.
+            static TINTS: RefCell<(u64, HashMap<(usize, i32), [f32; 3]>)> =
+                RefCell::new((0, HashMap::new()));
+        }
+
+        let generation = self
+            .tint_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
         let key = (profile_id.0, scalar);
-        if let Ok(cache) = self.tint_cache.lock()
-            && let Some(hit) = cache.get(&key)
-        {
-            return *hit;
-        }
-        let profile = self
-            .profiles
-            .get(profile_id)
-            .or_else(|| self.profiles.get(self.profiles.default_profile_id()))
-            .expect("default light profile is always present");
-        let scale = scalar as f32 / LIGHT_UNIT as f32;
-        let tint = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
-        if let Ok(mut cache) = self.tint_cache.lock() {
-            cache.insert(key, tint);
-        }
-        tint
+        TINTS.with(|cell| {
+            let mut cache = cell.borrow_mut();
+            if cache.0 != generation {
+                cache.0 = generation;
+                cache.1.clear();
+            }
+            if let Some(hit) = cache.1.get(&key) {
+                return *hit;
+            }
+            let profile = self
+                .profiles
+                .get(profile_id)
+                .or_else(|| self.profiles.get(self.profiles.default_profile_id()))
+                .expect("default light profile is always present");
+            let scale = scalar as f32 / LIGHT_UNIT as f32;
+            let tint = key_to_rgb(profile.palette_rgb()).map(|channel| channel * scale);
+            cache.1.insert(key, tint);
+            tint
+        })
     }
 
-    /// Drop cached tints after any change to the profiles or their colours.
+    /// Invalidate every thread's tint cache after a profile change.
     fn clear_tint_cache(&self) {
-        if let Ok(mut cache) = self.tint_cache.lock() {
-            cache.clear();
-        }
+        self.tint_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
