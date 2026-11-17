@@ -1424,14 +1424,15 @@ impl ApplicationHandler for App {
                     let is_escape: bool =
                         code == KeyCode::Escape && event.state.is_pressed() && !event.repeat;
                     let in_game: bool = state.frontend.screen == GameScreen::InGame;
+                    // Ctrl+Alt+= (Linux) / Cmd+Alt+T (macOS monitor): Ctrl+Alt+T
+                    // is the desktop's terminal shortcut on most Linux setups.
                     #[cfg(feature = "debug-tools")]
                     if in_game
                         && event.state.is_pressed()
                         && !event.repeat
-                        && code == KeyCode::KeyT
+                        && code == KeyCode::Equal
                         && state.platform.live_modifiers.alt_key()
-                        && (state.platform.live_modifiers.super_key()
-                            || state.platform.live_modifiers.control_key())
+                        && state.platform.live_modifiers.control_key()
                     {
                         state.match_state.trainer_visible = !state.match_state.trainer_visible;
                         state.platform.window.request_redraw();
