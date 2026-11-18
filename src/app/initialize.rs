@@ -1069,7 +1069,7 @@ impl App {
             match_state: crate::app::match_runtime::state::MatchState {
                 trainer_mcv_armed: false,
                 trainer_visible: true,
-                trainer_flash_until_ms: [0; 9],
+                trainer_flash_until_ms: [0; 10],
                 campaign_names: Default::default(),
                 session: Default::default(),
                 network_wait: Default::default(),

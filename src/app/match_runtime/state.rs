@@ -100,7 +100,7 @@ pub(crate) struct MatchState {
     /// Trainer panel visibility (Cmd/Ctrl+Alt+T). Client-side only.
     pub(crate) trainer_visible: bool,
     /// Wall-clock end of each one-shot trainer row's lit flash, indexed by row.
-    pub(crate) trainer_flash_until_ms: [u64; 9],
+    pub(crate) trainer_flash_until_ms: [u64; 10],
     /// Effective simulation ticks per second — controls game speed.
     /// Default follows retail/YR skirmish stored game speed 1.
     pub(crate) sim_speed_tps: u32,
