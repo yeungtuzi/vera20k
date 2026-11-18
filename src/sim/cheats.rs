@@ -93,6 +93,10 @@ pub(crate) struct DebugToolsState {
     modified: bool,
     replay_locked: bool,
     logged_entities: Vec<u64>,
+    /// Whether `reveal_map` was applied to this owner's shroud, so toggling it
+    /// off can restore the ordinary fog instead of leaving a visible but
+    /// unselectable map.
+    reveal_was_on: bool,
 }
 
 impl Simulation {
@@ -246,6 +250,14 @@ impl Simulation {
             return;
         }
         let flags = self.debug_tools.flags;
+        if flags.reveal_map != self.debug_tools.reveal_was_on {
+            if flags.reveal_map {
+                self.reveal_map_for_owner(owner, rules);
+            } else {
+                self.reset_shroud_for_owner(owner, rules);
+            }
+            self.debug_tools.reveal_was_on = flags.reveal_map;
+        }
         let pending = std::mem::take(&mut self.debug_tools.pending);
         if flags.infinite_money
             && let Some(house) = self.houses.get_mut(&owner)
@@ -283,12 +295,23 @@ impl Simulation {
             }
         }
         if pending & 2 != 0 {
-            for entity in self.substrate.entities.values_mut() {
-                if entity.owner() == owner
-                    && entity.lifecycle.object_alive()
-                    && !entity.death.is_dying()
-                    && entity.category() != crate::map::entities::EntityCategory::Structure
-                {
+            // Promote everything the player actually commands, not only units
+            // owned by the local House: campaign scripts hand over spies,
+            // Tanya and captured actors whose owning House differs.
+            let ids: Vec<u64> = self
+                .substrate
+                .entities
+                .iter_sorted()
+                .filter(|(id, entity)| {
+                    entity.category() != crate::map::entities::EntityCategory::Structure
+                        && entity.lifecycle.object_alive()
+                        && !entity.death.is_dying()
+                        && self.techno_player_controllable(*id, rules)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in ids {
+                if let Some(entity) = self.substrate.entities.get_mut(id) {
                     entity.veterancy.set_elite();
                 }
             }
