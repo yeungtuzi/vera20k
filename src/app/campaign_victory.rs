@@ -116,6 +116,20 @@ fn map_select_stages(mapsel: &IniFile, side: &str) -> Vec<String> {
         .collect()
 }
 
+/// `ALL05S.MAP` -> `ALL05`: the mission number shared by a custom pack's
+/// theatre-suffixed map and MAPSELMD's original stage name.
+fn map_stem(name: &str) -> String {
+    let base = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_uppercase();
+    base.trim_end_matches(|c: char| c.is_ascii_alphabetic()).to_owned()
+}
+
 /// The index of `side`'s MAPSELMD stage whose `Scenario=` is `scenario`, as
 /// `0x005CF760` finds the current stage.
 pub(crate) fn map_select_stage_of(mapsel: &IniFile, side: &str, scenario: &str) -> Option<u16> {
@@ -161,9 +175,20 @@ pub(crate) fn map_select(
     let stage = match skip {
         // 5CF810 masks the saved word and indexes the loaded vector.
         Some((index, _)) => stages.get(usize::from(index)),
-        None => stages.iter().find(|stage| {
-            map_select_value(mapsel, stage, "Scenario").eq_ignore_ascii_case(current)
-        }),
+        None => stages
+            .iter()
+            .find(|stage| {
+                map_select_value(mapsel, stage, "Scenario").eq_ignore_ascii_case(current)
+            })
+            .or_else(|| {
+                // Custom campaigns reuse MAPSELMD's original stage names
+                // (ALL05umd) while shipping differently suffixed maps
+                // (ALL05S). Match the numbered mission, not the suffix.
+                let wanted = map_stem(current);
+                stages.iter().find(|stage| {
+                    map_stem(&map_select_value(mapsel, stage, "Scenario")) == wanted
+                })
+            }),
     };
     let Some(stage) = stage else {
         // gamemd FUN_005AE220 @0x005AE220,5AE31C..5AE369 rejects the
@@ -208,6 +233,33 @@ pub(crate) fn map_select(
     } else {
         MapSelectPick::Fault("the current MAPSELMD stage has no choice")
     }
+}
+
+/// MAPSELMD names the original theatre map (`ALL06umd.MAP`) even when the
+/// custom pack ships the same mission under another suffix (`ALL06U.MAP`).
+/// Keep an existing exact name; otherwise try the common theatre suffixes.
+fn resolve_staged_scenario(
+    assets: &crate::assets::asset_manager::AssetManager,
+    scenario: &str,
+) -> String {
+    if assets.get(scenario).is_some() {
+        return scenario.to_owned();
+    }
+    let Some((stem, extension)) = scenario.rsplit_once('.') else {
+        return scenario.to_owned();
+    };
+    let bare = stem.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    if bare == stem {
+        return scenario.to_owned();
+    }
+    for suffix in ["U", "S", "T", "UMD", "SMD", "TMD", "DMD", ""] {
+        let candidate = format!("{bare}{suffix}.{extension}");
+        if assets.get(&candidate).is_some() {
+            log::info!("MAPSELMD names {scenario}; using staged {candidate}");
+            return candidate;
+        }
+    }
+    scenario.to_owned()
 }
 
 /// GameExit::Victory's branch once the score has returned.
@@ -324,14 +376,21 @@ impl App {
                 };
                 // A name that is no map name starts nothing, as a MapSelect fault.
                 let startup = match (scenario, sim.session().campaign_mission_counter()) {
-                    (Some(scenario), Some(counter)) => campaign.next_mission(
-                        scenario,
-                        counter + 1,
-                        profile.difficulty,
-                        sim.session().game_options().game_speed,
-                        sim.save_campaign_carry_over(),
-                        &mut crate::app::match_bootstrap::OrdinaryMatchSeedClock,
-                    ),
+                    (Some(scenario), Some(counter)) => {
+                        let scenario = state
+                            .process_assets
+                            .manager()
+                            .map(|assets| resolve_staged_scenario(assets, &scenario))
+                            .unwrap_or(scenario);
+                        campaign.next_mission(
+                            scenario,
+                            counter + 1,
+                            profile.difficulty,
+                            sim.session().game_options().game_speed,
+                            sim.save_campaign_carry_over(),
+                            &mut crate::app::match_bootstrap::OrdinaryMatchSeedClock,
+                        )
+                    }
                     _ => None,
                 };
                 match startup.map(Box::new) {
