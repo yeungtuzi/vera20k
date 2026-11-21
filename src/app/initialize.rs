@@ -473,7 +473,10 @@ impl App {
         let inner_size: winit::dpi::Size = if capture {
             PhysicalSize::new(window_width, window_height).into()
         } else if let Some((width, height)) = env_window {
-            winit::dpi::LogicalSize::new(width.max(640), height.max(480)).into()
+            // Physical, not logical: the point of the override is a surface of
+            // exactly this many pixels so a HiDPI compositor does not multiply
+            // it back up (3840x2160 on a 4K desktop at 200%).
+            winit::dpi::PhysicalSize::new(width.max(640), height.max(480)).into()
         } else {
             winit::dpi::LogicalSize::new(window_width, window_height).into()
         };
