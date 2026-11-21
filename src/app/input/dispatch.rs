@@ -412,7 +412,6 @@ pub(crate) fn tactical_mouse(state: &mut AppState, button: MouseButton, btn_stat
                     state.match_state.input.queued_order_mode = OrderMode::Move;
                     return;
                 }
-                }
                 band_box_left_up(state, LeftUp::Tactical);
             }
         }

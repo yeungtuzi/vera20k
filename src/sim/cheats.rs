@@ -367,14 +367,13 @@ impl Simulation {
             return None;
         }
         let owner_name = self.interner.resolve(owner).to_owned();
-        let id = self.spawn_object_with_overlay_registry(
+        let id = self.spawn_object_with_map_overlays(
             &type_id,
             &owner_name,
             rx,
             ry,
             64,
             rules,
-            rules.overlay_registry(),
         )?;
         self.debug_tools.modified = true;
         Some(id)

@@ -95,10 +95,324 @@ pub(crate) struct MatchState {
     /// without an in-scenario modal. Every modal transition ends it.
     pub(crate) debug_pause: bool,
     /// Debug trainer one-shot: the next tactical left click drops the local
-    /// house's MCV on that cell instead of selecting or ordering. Cleared by the
-    /// click, by leaving the match, and never serialized.
+    /// house's MCV on that cell.
     pub(crate) trainer_mcv_armed: bool,
-    /// Effective simulation ticks per second — controls game speed.
-    /// Default follows retail/YR skirmish stored game speed 1.
-    pub(crate) sim_speed_tps: u32,
->>>>>>> f152fb851 (offline trainer panel, art bound clamp, and terrain diagnostics)
+    /// Trainer panel visibility (Cmd/Ctrl+Alt+T / Ctrl+Alt+=).
+    pub(crate) trainer_visible: bool,
+    /// Wall-clock end of each one-shot trainer row's lit flash, indexed by row.
+    pub(crate) trainer_flash_until_ms: [u64; 10],
+}
+
+impl MatchState {
+    /// Shared ScenarioPause684060 audio hold, independent of menu/debug pause.
+    /// Main_Tick55D82C also gates offline world admission on its counter.
+    pub(crate) fn presentation_paused(&self, screen: &crate::ui::game_screen::GameScreen) -> bool {
+        presentation_pause_for_screen(
+            screen,
+            self.paused(),
+            self.sim_runtime.runtime().map(|rt| rt.simulation.session()),
+        )
+    }
+    /// Native elapsed-clock intent excludes the relay hold and network
+    /// menus: those menus never stop the score clock. Audio still combines
+    /// every physical pause through presentation_paused.
+    pub(crate) fn elapsed_clock_paused(&self, screen: &crate::ui::game_screen::GameScreen) -> bool {
+        elapsed_clock_pause_for_screen(
+            screen,
+            self.session_mode(),
+            self.match_presentation.in_game_menu.is_open(),
+            self.match_presentation
+                .radar_anim
+                .as_ref()
+                .is_some_and(|radar| radar.movie_pause()),
+            self.sim_runtime
+                .runtime()
+                .is_some_and(|runtime| runtime.simulation.session().scenario_paused()),
+            self.match_presentation.commander_feedback.result_waits(),
+        )
+    }
+
+    pub(crate) fn paused(&self) -> bool {
+        self.local_paused() || self.multiplayer_paused()
+    }
+
+    pub(crate) fn local_paused(&self) -> bool {
+        self.match_presentation.in_game_menu.is_open()
+            || self.debug_pause
+            || self
+                .match_presentation
+                .radar_anim
+                .as_ref()
+                .is_some_and(|radar| radar.movie_pause())
+    }
+
+    /// The relay's marker applies after the entire barrier frame, including a
+    /// retained post-Logic transaction. This is a view of network authority,
+    /// not an app-owned pause flag or a Scenario pause credit.
+    pub(crate) fn multiplayer_paused(&self) -> bool {
+        self.live_network
+            .as_ref()
+            .and_then(|live| live.multiplayer_pause())
+            .zip(self.sim_runtime.runtime())
+            .is_some_and(|(pause, runtime)| {
+                multiplayer_pause_reached(
+                    pause,
+                    runtime.simulation.session().binary_frame(),
+                    runtime.simulation.pending_network_wait(),
+                )
+            })
+    }
+
+    pub(crate) fn sync_multiplayer_pause_clock(&mut self, wall_ms: u64) {
+        let paused = self.multiplayer_paused();
+        self.scenario_elapsed_clock
+            .set_multiplayer_paused(paused, wall_ms);
+    }
+
+    /// Main_Tick (`0x0055D360`) is not running. A LAN/WOL modal's pump
+    /// `0x00623120` keeps calling it in GameMode 3/4, so what Main_Tick
+    /// drives keeps going under the dialog: `MessageListClass::Manage`
+    /// (`0x005D4430`, its only caller) ages the rows. Debug pause remains a
+    /// local diagnostic gate; native offline Scenario62C gates all its holds.
+    pub(crate) fn main_tick_frozen(&self) -> bool {
+        self.sim_runtime
+            .runtime()
+            .is_some_and(|rt| rt.simulation.pending_network_failure().is_some())
+            || self.debug_pause
+            || self.multiplayer_paused()
+            || super::scenario_pause::blocks_main_tick(
+                self.session_mode(),
+                self.sim_runtime
+                    .runtime()
+                    .is_some_and(|rt| rt.simulation.session().scenario_paused()),
+            )
+            || (self.match_presentation.in_game_menu.is_open() && !self.session_mode().is_network())
+    }
+
+    /// `GameMode` (`0x00A8B238`) from whichever side holds it: the installed
+    /// world's saved ScenarioSession from install until the shell writes it
+    /// again, otherwise the shell (see `MatchSession`).
+    pub(crate) fn session_mode(&self) -> super::session::SessionMode {
+        held_session_mode(
+            &self.session,
+            self.sim_runtime.runtime().map(|rt| rt.simulation.session()),
+        )
+    }
+
+    /// The live scenario's pinned player, including a successfully restored save.
+    pub(crate) fn local_player_owner(&self) -> Option<&str> {
+        self.sim_runtime
+            .runtime()
+            .and_then(|runtime| scenario_local_owner(&runtime.simulation))
+    }
+
+    /// Bring VERA's relation colours up to date with the world, as the local
+    /// house sees it.
+    pub(crate) fn refresh_relation_colors(&mut self) {
+        if let Some(runtime) = self.sim_runtime.runtime() {
+            let sim = &runtime.simulation;
+            self.match_presentation
+                .rebuild_relation_color_map(sim, scenario_local_owner(sim));
+        }
+    }
+}
+
+fn multiplayer_pause_reached(
+    pause: crate::net::live_commands::MultiplayerPauseStatus,
+    next_frame: u32,
+    transaction_pending: bool,
+) -> bool {
+    pause.available && pause.paused && next_frame > pause.frame && !transaction_pending
+}
+
+/// `result_waits` is VERA's: a published result the exit router leaves
+/// waiting for a commander clip. Native routes a result after the frame that
+/// publishes it, so its score time ends on that frame; the clip's own pause
+/// and resume must not restart the clock.
+fn elapsed_clock_pause_for_screen(
+    screen: &crate::ui::game_screen::GameScreen,
+    mode: super::session::SessionMode,
+    menu_open: bool,
+    movie_paused: bool,
+    scenario_paused: bool,
+    result_waits: bool,
+) -> bool {
+    matches!(screen, crate::ui::game_screen::GameScreen::InGame)
+        && (movie_paused
+            || result_waits
+            || (menu_open && !mode.is_network())
+            || super::scenario_pause::blocks_main_tick(mode, scenario_paused))
+}
+
+/// A retained runtime can outlive its tactical screen. This is a physical
+/// audio/presentation query; it never retires saved simulation pause credits.
+fn presentation_pause_for_screen(
+    screen: &crate::ui::game_screen::GameScreen,
+    local_pause: bool,
+    scenario: Option<&crate::sim::scenario_session::ScenarioSession>,
+) -> bool {
+    matches!(screen, crate::ui::game_screen::GameScreen::InGame)
+        && (local_pause || scenario.is_some_and(|session| session.scenario_paused()))
+}
+
+fn held_session_mode(
+    session: &super::session::MatchSession,
+    world: Option<&crate::sim::scenario_session::ScenarioSession>,
+) -> super::session::SessionMode {
+    session.shell_mode().unwrap_or_else(|| {
+        world
+            .expect("only an installed world holds GameMode")
+            .game_mode()
+    })
+}
+
+#[cfg(all(test, tests_app_match))]
+mod tests {
+    use super::{
+        elapsed_clock_pause_for_screen, held_session_mode, multiplayer_pause_reached,
+        presentation_pause_for_screen,
+    };
+    use crate::app::match_runtime::session::{MatchSession, NetworkReturnContext, SessionMode};
+    use crate::sim::world::Simulation;
+    use crate::ui::game_screen::GameScreen;
+
+    #[test]
+    fn shared_pause_waits_for_the_complete_barrier_and_survives_pending_resume() {
+        let mut pause = crate::net::live_commands::MultiplayerPauseStatus {
+            available: true,
+            paused: true,
+            frame: 42,
+            epoch: 1,
+            pending: false,
+        };
+        assert!(!multiplayer_pause_reached(pause, 42, false));
+        assert!(!multiplayer_pause_reached(pause, 43, true));
+        assert!(multiplayer_pause_reached(pause, 43, false));
+        pause.pending = true;
+        assert!(multiplayer_pause_reached(pause, 43, false));
+        pause.paused = false;
+        assert!(!multiplayer_pause_reached(pause, 43, false));
+    }
+
+    #[test]
+    fn game_mode_reads_from_its_one_holder() {
+        let mut session = MatchSession::default();
+        let mut world = Simulation::with_seed(0);
+        world.install_session_mode(SessionMode::Skirmish);
+        // Process start: the shell holds 0 even beside a retained world.
+        assert_eq!(held_session_mode(&session, None), SessionMode::Campaign);
+        assert_eq!(
+            held_session_mode(&session, Some(world.session())),
+            SessionMode::Campaign
+        );
+        session.begin_offline(SessionMode::Skirmish, None);
+        session.hand_mode_to_world(world.session().game_mode());
+        assert_eq!(
+            held_session_mode(&session, Some(world.session())),
+            SessionMode::Skirmish
+        );
+        // A shell write after the match takes it back from the finished world.
+        session.enter_network(NetworkReturnContext::Wol);
+        assert_eq!(
+            held_session_mode(&session, Some(world.session())),
+            SessionMode::Wol
+        );
+    }
+
+    /// A result the exit router leaves waiting for a commander clip keeps the
+    /// score clock stopped, although the clip itself does not pause the match.
+    #[test]
+    fn a_result_waiting_for_a_clip_keeps_the_score_clock_stopped() {
+        let paused = |result_waits| {
+            elapsed_clock_pause_for_screen(
+                &GameScreen::InGame,
+                SessionMode::Skirmish,
+                false,
+                false,
+                false,
+                result_waits,
+            )
+        };
+        assert!(!paused(false));
+        assert!(paused(true));
+    }
+
+    #[test]
+    fn retained_pause_does_not_leak_into_result_or_shell_audio() {
+        assert!(elapsed_clock_pause_for_screen(
+            &GameScreen::InGame,
+            SessionMode::Skirmish,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(!elapsed_clock_pause_for_screen(
+            &GameScreen::InGame,
+            SessionMode::Wol,
+            true,
+            false,
+            true,
+            false
+        ));
+        assert!(elapsed_clock_pause_for_screen(
+            &GameScreen::InGame,
+            SessionMode::Wol,
+            true,
+            true,
+            false,
+            false
+        ));
+        let mut sim = Simulation::with_seed(0);
+        sim.publish_scenario_started();
+        sim.pause_scenario_for_test(2);
+        assert!(presentation_pause_for_screen(
+            &GameScreen::InGame,
+            false,
+            Some(sim.session())
+        ));
+        // Score entry retains ScenarioStarted until Continue; it is not the
+        // presentation-lifetime boundary. Shell return retains the runtime too.
+        for screen in [
+            GameScreen::MissionResult {
+                title: String::new(),
+                detail: String::new(),
+            },
+            GameScreen::MainMenu,
+            GameScreen::Loading,
+        ] {
+            assert!(
+                !presentation_pause_for_screen(&screen, false, Some(sim.session())),
+                "{screen:?}"
+            );
+        }
+        // A failed load returning to the current world must retain the hold.
+        assert!(sim.session().scenario_pause_timed());
+        assert!(presentation_pause_for_screen(
+            &GameScreen::InGame,
+            false,
+            Some(sim.session())
+        ));
+        sim.expire_scenario_pause_for_test();
+        assert!(!presentation_pause_for_screen(
+            &GameScreen::InGame,
+            false,
+            Some(sim.session())
+        ));
+        assert!(presentation_pause_for_screen(
+            &GameScreen::InGame,
+            true,
+            Some(sim.session())
+        ));
+    }
+}
+
+/// Native current House A83D4C is saved67F802, loaded67F9F3 and swizzled67FA0E.
+/// Do not retain a separate app owner across Simulation replacement or infer it
+/// from selection/human flags. Save validation owns reference validity.
+pub(crate) fn scenario_local_owner(simulation: &crate::sim::world::Simulation) -> Option<&str> {
+    simulation
+        .session()
+        .current_house()
+        .map(|owner| simulation.interner().resolve(owner))
+}

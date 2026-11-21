@@ -1243,6 +1243,9 @@ impl App {
                 configured_input_delay_ticks: input_delay_ticks,
                 sandbox_full_visibility: false,
                 debug_pause: false,
+                trainer_mcv_armed: false,
+                trainer_visible: true,
+                trainer_flash_until_ms: [0; 10],
             },
             frontend: crate::app::frontend::state::FrontendState {
                 shell_dialog_background: None,

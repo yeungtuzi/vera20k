@@ -391,7 +391,7 @@ pub(crate) fn activate_trainer_row(
         let available = state
             .match_state
             .sim_runtime
-            .as_ref()
+            .runtime()
             .is_some_and(|runtime| runtime.simulation.trainer_available());
         if !available {
             return false;
