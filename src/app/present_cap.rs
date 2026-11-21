@@ -71,11 +71,10 @@ pub(crate) fn pace_frame(focused: bool) {
     let now = Instant::now();
     let mut next = NEXT.with(std::cell::Cell::get).unwrap_or(now);
     if next <= now {
-        // A late frame skips to the following grid slot instead of building
-        // debt: never busy-loop to catch up.
-        let late = now.duration_since(next).as_nanos();
-        let slots = (late / slot.as_nanos()) as u32 + 1;
-        next += slot * slots;
+        // A late frame starts a fresh grid here instead of skipping whole
+        // slots: skipping turned one 25 ms frame into a 33 ms one and the
+        // window read 40 fps, while a fresh grid costs one short gap.
+        next = now;
     }
     let wait = next.duration_since(now);
     if wait > Duration::ZERO {
