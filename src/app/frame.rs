@@ -815,106 +815,6 @@ impl App {
         crate::app::input::hardware_cursor::show(state, event_loop, arrow);
     }
 
-    /// Keeps the compositor's own pointer showing the game's current cursor art.
-    ///
-    /// The software cursor is drawn into the frame, so it moves only when the
-    /// next frame presents. With `VERA_HW_CURSOR` the OS pointer carries the
-    /// same art and follows the mouse immediately.
-    #[cfg(target_os = "linux")]
-    fn sync_hardware_cursor(state: &mut AppState, event_loop: &ActiveEventLoop) {
-        use std::cell::{Cell, RefCell};
-        use std::collections::HashMap;
-
-        thread_local! {
-            static CACHE: RefCell<
-                HashMap<(crate::render::cursor_atlas::CursorId, usize, u32), winit::window::CustomCursor>,
-            > = RefCell::new(HashMap::new());
-            static SHOWN: Cell<Option<(crate::render::cursor_atlas::CursorId, usize, u32)>> =
-                const { Cell::new(None) };
-            static LOGGED: Cell<bool> = const { Cell::new(false) };
-        }
-
-        if std::env::var_os("VERA_HW_CURSOR").is_none() {
-            return;
-        }
-        let targets = crate::app::input::cursor::CursorTargets::read(state);
-        let Some((id, index, frame, hotspot)) =
-            crate::app::presentation::ui_overlays::hardware_cursor_frame(state, &targets)
-        else {
-            return;
-        };
-        if !LOGGED.with(std::cell::Cell::get) {
-            log::info!("hardware cursor: on");
-            LOGGED.with(|logged| logged.set(true));
-        }
-        // The compositor scales the low-resolution frame up to the panel, so
-        // the cursor has to grow by the same factor or it looks tiny next to
-        // the upscaled world.
-        let scale = state
-            .platform
-            .window
-            .current_monitor()
-            .map(|monitor| {
-                let window_width = state.platform.window.inner_size().width.max(1);
-                monitor.size().width as f32 / window_width as f32
-            })
-            .unwrap_or(1.0)
-            .clamp(1.0, 4.0);
-        let key = (id, index, (scale * 100.0).round() as u32);
-        if SHOWN.with(|shown| shown.get()) == Some(key) {
-            return;
-        }
-        let cursor = CACHE.with(|cache| {
-            if let Some(cursor) = cache.borrow().get(&key) {
-                return Some(cursor.clone());
-            }
-            let (rgba, width, height, hot_x, hot_y) =
-                Self::scale_cursor(frame.rgba.as_slice(), frame.width, frame.height, hotspot, scale);
-            let source =
-                winit::window::CustomCursor::from_rgba(rgba, width, height, hot_x, hot_y).ok()?;
-            let cursor = event_loop.create_custom_cursor(source);
-            cache.borrow_mut().insert(key, cursor.clone());
-            Some(cursor)
-        });
-        if let Some(cursor) = cursor {
-            state
-                .platform
-                .window
-                .set_cursor(winit::window::Cursor::Custom(cursor));
-            SHOWN.with(|shown| shown.set(Some(key)));
-        }
-    }
-
-    /// Nearest-neighbour scale for the hardware cursor art.
-    #[cfg(target_os = "linux")]
-    fn scale_cursor(
-        rgba: &[u8],
-        width: f32,
-        height: f32,
-        hotspot: [f32; 2],
-        scale: f32,
-    ) -> (Vec<u8>, u16, u16, u16, u16) {
-        let src_w = width.max(1.0) as u32;
-        let src_h = height.max(1.0) as u32;
-        let dst_w = ((src_w as f32 * scale).round() as u32).max(1);
-        let dst_h = ((src_h as f32 * scale).round() as u32).max(1);
-        let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
-        for y in 0..dst_h {
-            let sy = (y as f32 / scale) as u32;
-            for x in 0..dst_w {
-                let sx = (x as f32 / scale) as u32;
-                let src = ((sy.min(src_h - 1) * src_w + sx.min(src_w - 1)) * 4) as usize;
-                let dst = ((y * dst_w + x) * 4) as usize;
-                if src + 4 <= rgba.len() && dst + 4 <= out.len() {
-                    out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
-                }
-            }
-        }
-        let hot_x = (hotspot[0] * scale).clamp(0.0, (dst_w - 1) as f32) as u16;
-        let hot_y = (hotspot[1] * scale).clamp(0.0, (dst_h - 1) as f32) as u16;
-        (out, dst_w as u16, dst_h as u16, hot_x, hot_y)
-    }
-
     /// Dispatch rendering based on current GameScreen state.
     pub(super) fn render_frame(
         state: &mut AppState,
@@ -937,8 +837,6 @@ impl App {
         // Hold the presentation to the configured frame rate: the panel is
         // 120 Hz here and this GPU has no budget for 120 full frames.
         crate::app::present_cap::pace_frame(state.platform.window.has_focus());
-        #[cfg(target_os = "linux")]
-        Self::sync_hardware_cursor(state, event_loop);
         // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
         // request here, never a process exit.
         if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame

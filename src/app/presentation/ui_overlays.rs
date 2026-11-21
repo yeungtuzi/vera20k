@@ -2959,27 +2959,6 @@ pub(crate) fn build_software_cursor_instances(
     (vec![sprite], Some(SoftwareCursorDraw { id, frame: index }))
 }
 
-/// The frame the OS pointer should show, for the `VERA_HW_CURSOR` path.
-///
-/// The software cursor draws the same art into the frame; this hands the pair
-/// (cursor, frame) to the window so the compositor's pointer follows the mouse
-/// without waiting for the next present.
-pub(crate) fn hardware_cursor_frame<'a>(
-    state: &'a AppState,
-    targets: &CursorTargets,
-) -> Option<(CursorId, usize, &'a crate::render::cursor_atlas::SoftwareCursorFrame, [f32; 2])> {
-    let cursor = state.match_state.match_presentation.software_cursor.as_ref()?;
-    let (id, sequence) = active_cursor_sequence(state, targets)?;
-    let index = if id == CursorId::Default
-        && crate::app::input::planning_mode::node_at_cursor(state).is_some()
-    {
-        1
-    } else {
-        software_cursor_frame_index(id, sequence)?
-    };
-    Some((id, index, sequence.frames.get(index)?, sequence.hotspot))
-}
-
 /// The texture of the frame a draw's cursor sprite was built from.
 pub(crate) fn software_cursor_texture(
     state: &AppState,
