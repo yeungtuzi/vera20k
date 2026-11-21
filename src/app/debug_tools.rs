@@ -264,6 +264,7 @@ pub(crate) enum TrainerRow {
     Invincible,
     DeadlyShot,
     GetMcv,
+    WinMission,
 }
 
 impl TrainerRow {
@@ -278,6 +279,7 @@ impl TrainerRow {
             Self::Invincible => "INVINCIBLE",
             Self::DeadlyShot => "DEADLY SHOT",
             Self::GetMcv => "GET A MCV",
+            Self::WinMission => "WIN MISSION",
         }
     }
 
@@ -289,10 +291,25 @@ impl TrainerRow {
             Self::Tech | Self::RevealMap | Self::Invincible | Self::DeadlyShot
         )
     }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Tech => 0,
+            Self::PromoteAll => 1,
+            Self::Superweapons => 2,
+            Self::RevealMap => 3,
+            Self::TakeOver => 4,
+            Self::AddMoney => 5,
+            Self::Invincible => 6,
+            Self::DeadlyShot => 7,
+            Self::GetMcv => 8,
+            Self::WinMission => 9,
+        }
+    }
 }
 
 /// Panel rows in display order.
-pub(crate) const TRAINER_ROWS: [TrainerRow; 9] = [
+pub(crate) const TRAINER_ROWS: [TrainerRow; 10] = [
     TrainerRow::Tech,
     TrainerRow::PromoteAll,
     TrainerRow::Superweapons,
@@ -302,6 +319,7 @@ pub(crate) const TRAINER_ROWS: [TrainerRow; 9] = [
     TrainerRow::Invincible,
     TrainerRow::DeadlyShot,
     TrainerRow::GetMcv,
+    TrainerRow::WinMission,
 ];
 
 /// Panel geometry in *source* (playfield) pixels. The renderer and the click
@@ -371,17 +389,37 @@ pub(crate) fn trainer_row_states(state: &crate::app::AppState) -> Vec<(TrainerRo
                 TrainerRow::PromoteAll
                 | TrainerRow::Superweapons
                 | TrainerRow::TakeOver
-                | TrainerRow::AddMoney => true,
-                // Lit while the next click is already armed for a drop.
-                TrainerRow::GetMcv => state.match_state.trainer_mcv_armed,
+                | TrainerRow::AddMoney
+                | TrainerRow::GetMcv
+                | TrainerRow::WinMission => flash_active(state, row),
             };
             (row, lit)
         })
         .collect()
 }
 
+const TRAINER_FLASH_MS: u64 = 320;
+
+fn flash_active(state: &crate::app::AppState, row: TrainerRow) -> bool {
+    state.match_state.trainer_flash_until_ms[row.index()]
+        > crate::app::match_runtime::frame_pacer::wall_clock_ms()
+}
+
 /// Apply one panel row. Returns whether the trainer accepted it.
 pub(crate) fn activate_trainer_row(
+    state: &mut crate::app::AppState,
+    row: TrainerRow,
+) -> bool {
+    let accepted = activate_trainer_row_inner(state, row);
+    if accepted && !row.is_switch() {
+        state.match_state.trainer_flash_until_ms[row.index()] =
+            crate::app::match_runtime::frame_pacer::wall_clock_ms() + TRAINER_FLASH_MS;
+        state.platform.window.request_redraw();
+    }
+    accepted
+}
+
+fn activate_trainer_row_inner(
     state: &mut crate::app::AppState,
     row: TrainerRow,
 ) -> bool {
@@ -440,12 +478,14 @@ pub(crate) fn activate_trainer_row(
         TrainerRow::PromoteAll
         | TrainerRow::Superweapons
         | TrainerRow::TakeOver
-        | TrainerRow::AddMoney => {
+        | TrainerRow::AddMoney
+        | TrainerRow::WinMission => {
             let action = match row {
                 TrainerRow::PromoteAll => crate::sim::cheats::TrainerAction::VeteranAll,
                 TrainerRow::Superweapons => crate::sim::cheats::TrainerAction::SuperweaponsReady,
                 TrainerRow::TakeOver => crate::sim::cheats::TrainerAction::TakeSelection,
                 TrainerRow::AddMoney => crate::sim::cheats::TrainerAction::AddMoney,
+                TrainerRow::WinMission => crate::sim::cheats::TrainerAction::CompleteMission,
                 _ => unreachable!(),
             };
             let applied = runtime.simulation.request_trainer_action(action).is_ok();

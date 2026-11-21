@@ -1013,7 +1013,8 @@ impl ApplicationHandler for App {
                 .tactical_zoom()
                 .map(|zoom| zoom.src_height as f32)
                 .unwrap_or(state.platform.window.inner_size().height as f32);
-            if let Some(row) = crate::app::debug_tools::trainer_row_at(point, view_height)
+            if state.match_state.trainer_visible
+                && let Some(row) = crate::app::debug_tools::trainer_row_at(point, view_height)
                 && crate::app::debug_tools::activate_trainer_row(state, row)
             {
                 state.match_state.input.trainer_panel_pressed = true;
@@ -1472,6 +1473,19 @@ impl ApplicationHandler for App {
                     let is_escape: bool =
                         code == KeyCode::Escape && event.state.is_pressed() && !event.repeat;
                     let in_game: bool = state.frontend.screen == GameScreen::InGame;
+                    #[cfg(feature = "debug-tools")]
+                    if in_game
+                        && event.state.is_pressed()
+                        && !event.repeat
+                        && code == KeyCode::KeyT
+                        && state.platform.live_modifiers.alt_key()
+                        && (state.platform.live_modifiers.super_key()
+                            || state.platform.live_modifiers.control_key())
+                    {
+                        state.match_state.trainer_visible = !state.match_state.trainer_visible;
+                        state.platform.window.request_redraw();
+                        return;
+                    }
                     let paused_at_event = in_game && state.match_state.paused();
                     let locally_paused_at_event = in_game && state.match_state.local_paused();
 

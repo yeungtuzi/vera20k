@@ -833,7 +833,6 @@ impl App {
             state.match_state.trainer_visible = !state.match_state.trainer_visible;
             state.platform.window.request_redraw();
         }
-        }
         // A Cmd+Q swallowed by the macOS local monitor becomes a pause-menu
         // request here, never a process exit.
         if state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
@@ -1607,7 +1606,7 @@ impl App {
         // The debug trainer panel lives in the same final-window overlay pass,
         // above gameplay and below the playback status line.
         #[cfg(feature = "debug-tools")]
-        if state.frontend.screen == GameScreen::InGame {
+        if state.frontend.screen == GameScreen::InGame && state.match_state.trainer_visible {
             let states = crate::app::debug_tools::trainer_row_states(state);
             let rows: Vec<String> = states.iter().map(|(row, _)| row.label().to_owned()).collect();
             let lit: Vec<bool> = states.iter().map(|(_, lit)| *lit).collect();
