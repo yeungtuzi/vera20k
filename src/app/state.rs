@@ -268,6 +268,9 @@ impl AppState {
     /// the exit confirm) are shell pages that draw mouse.shp themselves, so
     /// they keep it; excluding them showed the OS arrow beside it.
     pub(crate) fn use_software_cursor(&self) -> bool {
+        if std::env::var_os("VERA_HW_CURSOR").is_some() {
+            return false;
+        }
         self.platform.owns_pointer()
             && !(self.frontend.screen == crate::ui::game_screen::GameScreen::MainMenu
                 && self.frontend.main_menu_shell_error.is_some())
