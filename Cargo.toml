@@ -262,6 +262,13 @@ block2 = "0.6"
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 arboard = { version = "3.7", default-features = false }
 
+# --- Process allocator ---
+# The game program (src/main.rs) allocates through mimalloc instead of the
+# process heap; the frame loop's short-lived vectors dominated glibc malloc on
+# the Linux hosts this fork targets (measured on aarch64 and x86_64).
+[target.'cfg(any(windows, all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
+
 # --- Windows memory allocator ---
 # The game program (src/main.rs) allocates through mimalloc on Windows instead
 
@@ -378,3 +385,9 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Whole-program optimisation for the game binary: the frame loop benefits from
+# cross-crate inlining more than the build time costs.
+[profile.release]
+lto = "thin"
+codegen-units = 1
