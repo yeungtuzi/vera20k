@@ -2221,10 +2221,8 @@ impl ApplicationHandler for App {
             && edge.is_pressed()
         {
             let view_height = state.platform.window.inner_size().height as f32;
-            let point = (
-                state.match_state.input.cursor_x,
-                state.match_state.input.cursor_y,
-            );
+            let (px, py) = state.match_state.input.cursor_px();
+            let point = (px as f32, py as f32);
             if state.match_state.trainer_visible
                 && let Some(row) = crate::app::debug_tools::trainer_row_at(point, view_height)
                 && crate::app::debug_tools::activate_trainer_row(state, row)
