@@ -2118,6 +2118,27 @@ impl App {
                 &state.persistence,
             ),
         );
+        #[cfg(feature = "debug-tools")]
+        if state.frontend.screen == GameScreen::InGame && state.match_state.trainer_visible {
+            let states = crate::app::debug_tools::trainer_row_states(state);
+            let rows: Vec<String> = states.iter().map(|(r, _)| r.label().to_owned()).collect();
+            let lit: Vec<bool> = states.iter().map(|(_, l)| *l).collect();
+            let origin = [0.0, 0.0];
+            let scale = 2.0;
+            let view_height = state.platform.window.inner_size().height as f32;
+            state.renderer.performance_overlay.encode_trainer(
+                &state.renderer.gpu,
+                &state.renderer.batch_renderer,
+                &mut encoder,
+                &output.texture,
+                &state.renderer.bit_font,
+                &rows,
+                &lit,
+                origin,
+                scale,
+                view_height,
+            );
+        }
         if state.frontend.screen == GameScreen::InGame
             && let Some(offset_px) = runtime_pass.screen_shake_offset
         {

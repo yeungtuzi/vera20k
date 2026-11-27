@@ -195,10 +195,8 @@ pub(crate) fn map_select(
         // current stage before SetNextScenario5AE126 rearms the save latch.
         return MapSelectPick::InitFailed;
     };
-    // `0x005AE15C`: only a stage with a MapVQ chooses.
-    if skip.is_none() && map_select_value(mapsel, stage, "MapVQ").is_empty() {
-        return MapSelectPick::KeepCurrent;
-    }
+    // Custom campaigns reuse MAPSELMD without MapVQ movie entries. The movie
+    // is optional; refusing the stage made such packs replay the finished map.
     // Choices are keys `0..=255`, lowest first (`0x005CFF81..0x005D0040`);
     // `0x005AE188` takes the first.
     let choices = (0..=255u32)

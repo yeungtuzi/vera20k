@@ -322,13 +322,13 @@ pub(crate) const TRAINER_ROWS: [TrainerRow; 10] = [
 
 /// Panel geometry in *source* (playfield) pixels. The renderer and the click
 /// hit-test share these, so the rows a player sees are the rows a click lands on.
-pub(crate) const TRAINER_PANEL_X: f32 = 6.0;
+pub(crate) const TRAINER_PANEL_X: f32 = 16.0;
 /// Row pitch. Larger than the glyph height, which is the breathing room between
 /// labels; the panel itself stays narrow and small.
-pub(crate) const TRAINER_ROW_HEIGHT: f32 = 20.0;
-pub(crate) const TRAINER_ROW_WIDTH: f32 = 150.0;
+pub(crate) const TRAINER_ROW_HEIGHT: f32 = 24.0;
+pub(crate) const TRAINER_ROW_WIDTH: f32 = 260.0;
 /// Deliberately small glyphs so the panel never competes with the battlefield.
-pub(crate) const TRAINER_GLYPH_SCALE: f32 = 1.4;
+pub(crate) const TRAINER_GLYPH_SCALE: f32 = 2.0;
 
 /// Top of the panel: flush left, vertically centred in the playfield.
 pub(crate) fn trainer_panel_top(view_height: f32) -> f32 {

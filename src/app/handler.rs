@@ -1066,6 +1066,18 @@ impl App {
             KeyCode::Escape | KeyCode::Enter | KeyCode::NumpadEnter
         );
         let in_game = state.frontend.screen == GameScreen::InGame;
+        #[cfg(feature = "debug-tools")]
+        if in_game
+            && fresh_press
+            && code == KeyCode::KeyT
+            && state.platform.live_modifiers.alt_key()
+            && (state.platform.live_modifiers.super_key()
+                || state.platform.live_modifiers.control_key())
+        {
+            state.match_state.trainer_visible = !state.match_state.trainer_visible;
+            state.platform.window.request_redraw();
+            return;
+        }
         let paused_at_event = in_game && state.match_state.paused();
         let locally_paused_at_event = in_game && state.match_state.local_paused();
         let modifiers = state.platform.live_modifiers;
@@ -2197,6 +2209,54 @@ impl ApplicationHandler for App {
             )
         {
             return;
+        }
+
+        #[cfg(feature = "debug-tools")]
+        if state.frontend.screen == GameScreen::InGame
+            && let WindowEvent::MouseInput {
+                state: edge,
+                button: MouseButton::Left,
+                ..
+            } = &event
+            && edge.is_pressed()
+        {
+            let view_height = state.platform.window.inner_size().height as f32;
+            let point = (
+                state.match_state.input.cursor_x,
+                state.match_state.input.cursor_y,
+            );
+            if state.match_state.trainer_visible
+                && let Some(row) = crate::app::debug_tools::trainer_row_at(point, view_height)
+                && crate::app::debug_tools::activate_trainer_row(state, row)
+            {
+                state.platform.window.request_redraw();
+                return;
+            }
+            if state.match_state.trainer_mcv_armed {
+                state.match_state.trainer_mcv_armed = false;
+                let cell = crate::app::match_runtime::sim_tick::screen_point_to_world_cell(
+                    &state.match_state,
+                    point.0,
+                    point.1,
+                );
+                let dropped = state
+                    .match_state
+                    .sim_runtime
+                    .write_sim(crate::app::match_runtime::sim_host::SimWrite::Debug)
+                    .is_some_and(|runtime| {
+                        let rules = &runtime.resources.rules;
+                        runtime
+                            .simulation
+                            .trainer_drop_mcv(cell.0, cell.1, rules)
+                            .is_some()
+                    });
+                if dropped {
+                    state.platform.window.request_redraw();
+                } else {
+                    state.match_state.trainer_mcv_armed = true;
+                }
+                return;
+            }
         }
 
         // A pause's end resyncs the held keys and gameplay modifiers; every
