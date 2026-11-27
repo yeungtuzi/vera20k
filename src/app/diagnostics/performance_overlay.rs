@@ -430,8 +430,11 @@ impl PerformanceOverlay {
         let mut instances = Vec::with_capacity(rows.len() * 8);
         for (index, (label, on)) in rows.iter().zip(lit).enumerate() {
             let text = format!("{} {}", if *on { "[x]" } else { "[ ]" }, label);
-            let x = origin[0] + 8.0 * scale;
-            let y = origin[1] + (top + index as f32 * row_height) * scale;
+            // Window-space overlay: `top` is already in window pixels, so it
+            // must not be multiplied by the glyph scale again.
+            let x = crate::app::debug_tools::TRAINER_PANEL_X;
+            let y = top + index as f32 * row_height;
+            let _ = origin;
             let tint = if *on { [0.35, 1.0, 0.35] } else { [0.85, 0.85, 0.85] };
             for (dx, dy, color) in [
                 (-1.0, 0.0, [0.0; 3]),
