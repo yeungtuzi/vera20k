@@ -1119,6 +1119,29 @@ impl App {
         if state.renderer.gpu.device_lost().is_some() {
             return Ok(FrameRenderOutcome::Unavailable);
         }
+        if crate::app::quit_guard::take_trainer_toggle_request() {
+            state.match_state.trainer_visible = !state.match_state.trainer_visible;
+            state.platform.window.request_redraw();
+        }
+        if crate::app::quit_guard::take_quit_request()
+            && state.frontend.screen == crate::ui::game_screen::GameScreen::InGame
+        {
+            use winit::keyboard::{Key as LogicalKey, KeyCode, KeyLocation, NamedKey};
+            let key = LogicalKey::Named(NamedKey::Escape);
+            crate::app::input::keyboard::in_game_key_edge(
+                state,
+                crate::app::input::keyboard::InGameKeyEdge {
+                    physical: KeyCode::Escape,
+                    logical: &key,
+                    unmodified: &key,
+                    location: KeyLocation::Standard,
+                    state: winit::event::ElementState::Pressed,
+                    repeat: false,
+                    text: None,
+                },
+                false,
+            );
+        }
         // Publish the player's colour-vision matrix before any early-return
         // present and before synchronous loading repaints: all of them encode
         // through the shared filter on GpuContext, not just the frame's tail.

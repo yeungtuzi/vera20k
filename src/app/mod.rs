@@ -92,6 +92,7 @@ pub(crate) mod new_mod;
 #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
 mod network_goodbye;
 pub(crate) mod movie_subtitles;
+pub(crate) mod quit_guard;
 pub(crate) mod persistence;
 /// The build description's native version metadata (`Phobos.version.h`).
 pub(crate) mod os_clipboard;
