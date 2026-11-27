@@ -58,6 +58,12 @@ pub enum TrainerAction {
     HealAll,
     VeteranAll,
     SuperweaponsReady,
+    /// Finish the running mission as won (campaign/skirmish only).
+    CompleteMission,
+    /// Transfer every selected object to the local house.
+    TakeSelection,
+    /// Add one million credits to the local house.
+    AddMoney,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -87,6 +93,10 @@ pub(crate) struct DebugToolsState {
     modified: bool,
     replay_locked: bool,
     logged_entities: Vec<u64>,
+    /// Whether `reveal_map` was applied to this owner's shroud, so toggling it
+    /// off can restore the ordinary fog instead of leaving a visible but
+    /// unselectable map.
+    reveal_was_on: bool,
 }
 
 impl Simulation {
@@ -217,6 +227,9 @@ impl Simulation {
             TrainerAction::HealAll => 1,
             TrainerAction::VeteranAll => 2,
             TrainerAction::SuperweaponsReady => 4,
+            TrainerAction::CompleteMission => 8,
+            TrainerAction::TakeSelection => 16,
+            TrainerAction::AddMoney => 32,
         };
         self.debug_tools.modified = true;
         Ok(())
@@ -237,6 +250,14 @@ impl Simulation {
             return;
         }
         let flags = self.debug_tools.flags;
+        if flags.reveal_map != self.debug_tools.reveal_was_on {
+            if flags.reveal_map {
+                self.reveal_map_for_owner(owner, rules);
+            } else {
+                self.reset_shroud_for_owner(owner, rules);
+            }
+            self.debug_tools.reveal_was_on = flags.reveal_map;
+        }
         let pending = std::mem::take(&mut self.debug_tools.pending);
         if flags.infinite_money
             && let Some(house) = self.houses.get_mut(&owner)
@@ -274,12 +295,23 @@ impl Simulation {
             }
         }
         if pending & 2 != 0 {
-            for entity in self.substrate.entities.values_mut() {
-                if entity.owner() == owner
-                    && entity.lifecycle.object_alive()
-                    && !entity.death.is_dying()
-                    && entity.category() != crate::map::entities::EntityCategory::Structure
-                {
+            // Promote everything the player actually commands, not only units
+            // owned by the local House: campaign scripts hand over spies,
+            // Tanya and captured actors whose owning House differs.
+            let ids: Vec<u64> = self
+                .substrate
+                .entities
+                .iter_sorted()
+                .filter(|(id, entity)| {
+                    entity.category() != crate::map::entities::EntityCategory::Structure
+                        && entity.lifecycle.object_alive()
+                        && !entity.death.is_dying()
+                        && self.techno_player_controllable(*id, rules)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in ids {
+                if let Some(entity) = self.substrate.entities.get_mut(id) {
                     entity.veterancy.set_elite();
                 }
             }
@@ -292,6 +324,126 @@ impl Simulation {
                 }
             }
         }
+        if pending & 8 != 0 {
+            // The binary frame is the native signed frame domain the outcome
+            // timer runs in (`sidebar_projection` converts the same way).
+            let frame = self.session.binary_frame() as i32;
+            if let Some(house) = self.houses.get_mut(&owner) {
+                house.debug_force_win(frame);
+            }
+        }
+        if pending & 32 != 0 {
+            if let Some(house) = self.houses.get_mut(&owner) {
+                house.economy_mut().add_credits(1_000_000);
+            }
+        }
+        if pending & 16 != 0 {
+            // Selection is simulation state (`Scenario` selection bits), not a
+            // client view, so the trainer can act on exactly what the player
+            // picked without the dashboard having to name object ids. Snapshot
+            // the ids first: `change_owner_with_rules` takes `&mut self`.
+            let selected: Vec<u64> = self
+                .substrate
+                .entities
+                .iter_sorted()
+                .filter(|(_, entity)| {
+                    entity.seldom.selection.is_selected()
+                        && entity.owner() != owner
+                        && entity.lifecycle.object_alive()
+                        && !entity.death.is_dying()
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in selected {
+                // `change_owner_with_rules` is the production owner swap: house
+                // counts, primary factory, gap/sight release and produce-cash all
+                // follow it. The trainer has no visitor context, so the client
+                // effects are empty by construction.
+                self.change_owner_with_rules(
+                    id,
+                    owner,
+                    rules,
+                    None,
+                    &mut crate::sim::world::FrameEffects::default(),
+                );
+            }
+        }
+    }
+
+    /// Debug trainer one-shot: drop the local house's own MCV on `(rx, ry)`.
+    ///
+    /// The authoritative admission is `spawn_object_with_overlay_registry`: its
+    /// Unlimbo placement runs the native entry rules (`foot_can_enter`), which
+    /// is the same gate a produced unit passes. The checks below only avoid
+    /// consuming the constructor's stable id and RNG word on a cell that plainly
+    /// cannot take a vehicle. `PathGrid::is_walkable` is deliberately not used —
+    /// it treats water as walkable.
+    pub fn trainer_drop_mcv(
+        &mut self,
+        rx: u16,
+        ry: u16,
+        rules: &crate::rules::ruleset::RuleSet,
+    ) -> Option<u64> {
+        let owner = self.trainer_write_owner().ok()?;
+        let type_id = self.trainer_mcv_type(owner, rules)?.to_owned();
+        if !self.trainer_cell_admits_vehicle(rx, ry) {
+            return None;
+        }
+        let owner_name = self.interner.resolve(owner).to_owned();
+        let id = self.spawn_object_with_map_overlays(
+            &type_id,
+            &owner_name,
+            rx,
+            ry,
+            64,
+            rules,
+        )?;
+        self.debug_tools.modified = true;
+        Some(id)
+    }
+
+    /// The house's own `BaseUnit` (MCV) type, resolved through the same
+    /// owner-compatibility gate the crate pickups use.
+    fn trainer_mcv_type<'a>(
+        &self,
+        owner: InternedId,
+        rules: &'a crate::rules::ruleset::RuleSet,
+    ) -> Option<&'a str> {
+        let country = self.interner.resolve(self.houses.get(&owner)?.house_type_id());
+        let country_bit = rules.country_owner_mask(country);
+        crate::sim::ai_buildable::first_owner_compatible(
+            rules,
+            &rules.general.base_unit_types,
+            crate::rules::object_type::ObjectCategory::Vehicle,
+            country_bit,
+        )
+        .map(|object| object.id.as_str())
+    }
+
+    /// Land/blocker facts a ground vehicle needs before its Unlimbo is worth
+    /// attempting. Occupancy and terrain objects are included so the trainer
+    /// reports "no" instead of dropping an MCV inside a building.
+    fn trainer_cell_admits_vehicle(&self, rx: u16, ry: u16) -> bool {
+        use crate::rules::terrain_rules::LandType;
+        let Some(cell) = self.resolved_terrain().and_then(|grid| grid.cell(rx, ry)) else {
+            return false;
+        };
+        if cell.outside_playfield
+            || cell.ground_walk_blocked
+            || cell.overlay_blocks
+            || cell.terrain_object_blocks
+        {
+            return false;
+        }
+        if matches!(
+            cell.land_type,
+            land if land == LandType::Water.as_index()
+                || land == LandType::Rock.as_index()
+                || land == LandType::Wall.as_index()
+        ) {
+            return false;
+        }
+        self.terrain_objects().members_at((rx, ry)).next().is_none()
     }
 
     pub(crate) fn debug_flags_for(&self, owner: InternedId) -> CheatFlags {

@@ -377,8 +377,7 @@ impl App {
                 // A name that is no map name starts nothing, as a MapSelect fault.
                 let startup = match (scenario, sim.session().campaign_mission_counter()) {
                     (Some(scenario), Some(counter)) => {
-                        let scenario = state
-                            .process_assets
+                        let scenario = process_assets
                             .manager()
                             .map(|assets| resolve_staged_scenario(assets, &scenario))
                             .unwrap_or(scenario);

@@ -20,7 +20,7 @@ mod view;
 use crate::util::time::Instant;
 use std::cell::RefCell;
 
-use crate::render::batch::{BatchRenderer, BatchTexture, CameraUniform, InstanceBufferPool};
+use crate::render::batch::{BatchRenderer, BatchTexture, CameraUniform, InstanceBufferPool, SpriteInstance};
 use crate::render::bit_font::BitFont;
 use crate::render::gpu::GpuContext;
 use crate::render::hud_paint::Material;
@@ -401,6 +401,140 @@ impl PerformanceOverlay {
             frame.logged_first_frame = true;
         }
         self.draw(gpu, batch, encoder, destination, frame, font);
+    }
+
+    /// Draw the offline trainer's fixed rows over the 4:3 playfield. `origin`
+    /// and `scale` come from the tactical zoom, so a panel click maps back to
+    /// the source pixels the hit test reads.
+    #[cfg(feature = "debug-tools")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_trainer(
+        &self,
+        gpu: &GpuContext,
+        batch: &BatchRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        destination: &wgpu::Texture,
+        font: &BitFont,
+        rows: &[String],
+        lit: &[bool],
+        origin: [f32; 2],
+        scale: f32,
+        view_height: f32,
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+        let mut frame = self.frame.borrow_mut();
+        let top = crate::app::debug_tools::trainer_panel_top(view_height);
+        let row_height = crate::app::debug_tools::TRAINER_ROW_HEIGHT;
+        let mut instances = Vec::with_capacity(rows.len() * 8);
+        for (index, (label, on)) in rows.iter().zip(lit).enumerate() {
+            let text = format!("{} {}", if *on { "[x]" } else { "[ ]" }, label);
+            let x = origin[0] + 8.0 * scale;
+            let y = origin[1] + (top + index as f32 * row_height) * scale;
+            let tint = if *on { [0.35, 1.0, 0.35] } else { [0.85, 0.85, 0.85] };
+            for (dx, dy, color) in [
+                (-1.0, 0.0, [0.0; 3]),
+                (1.0, 0.0, [0.0; 3]),
+                (0.0, -1.0, [0.0; 3]),
+                (0.0, 1.0, [0.0; 3]),
+                (0.0, 0.0, tint),
+            ] {
+                instances.extend(font.build_text(
+                    &text,
+                    x + dx * scale,
+                    y + dy * scale,
+                    scale,
+                    0.0,
+                    color,
+                    [0.0; 2],
+                ));
+            }
+        }
+        let count = instances.len() as u32;
+        self.draw_overlay(
+            gpu,
+            batch,
+            encoder,
+            destination,
+            &mut frame,
+            "trainer_panel",
+            &instances,
+            &[(font.atlas(), 0, count)],
+        );
+    }
+
+    /// Upload arbitrary overlay instances and draw each `(texture, start,
+    /// count)` range over the window surface. The trainer uses this.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_overlay(
+        &self,
+        gpu: &GpuContext,
+        batch: &BatchRenderer,
+        encoder: &mut wgpu::CommandEncoder,
+        destination: &wgpu::Texture,
+        frame: &mut OverlayFrame,
+        key: &'static str,
+        instances: &[SpriteInstance],
+        ranges: &[(&BatchTexture, u32, u32)],
+    ) {
+        let size = [destination.width(), destination.height()];
+        if frame.size != size {
+            frame.depth = Some(gpu.create_depth_texture());
+            frame.size = size;
+        }
+        let depth = frame
+            .depth
+            .get_or_insert_with(|| gpu.create_depth_texture());
+        let camera = CameraUniform {
+            screen_size: [size[0] as f32, size[1] as f32],
+            camera_pos: [0.0; 2],
+            zoom: 1.0,
+            world_origin_y: 0.0,
+            world_height: 1.0,
+            _pad: 0.0,
+            native_z_origin_y: 0.0,
+            native_z_pan: 0.0,
+        };
+        gpu.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera));
+        frame.pool.upload(gpu, key, instances);
+        let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Window trainer"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if let Some((buffer, _)) = frame.pool.get(key) {
+            for &(texture, start, count) in ranges {
+                batch.draw_passthrough_range_bound(
+                    &mut pass,
+                    texture,
+                    buffer,
+                    &self.camera_group,
+                    start,
+                    count,
+                );
+            }
+        }
     }
 
     /// Upload the painted panel and draw its runs in order over the window

@@ -99,6 +99,13 @@ pub(crate) struct MatchState {
     /// pays nothing for them. Built when the world is installed, dropped
     /// with it ([`crate::app::ui_modules`]).
     pub(crate) ui_modules: Option<crate::app::ui_modules::UiModules>,
+    /// Debug trainer one-shot: the next tactical left click drops the local
+    /// house's MCV on that cell.
+    pub(crate) trainer_mcv_armed: bool,
+    /// Trainer panel visibility (Cmd/Ctrl+Alt+T).
+    pub(crate) trainer_visible: bool,
+    /// Wall-clock end of each one-shot trainer row's lit flash, indexed by row.
+    pub(crate) trainer_flash_until_ms: [u64; 10],
 }
 
 impl MatchState {
